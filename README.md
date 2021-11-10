@@ -7,5 +7,8 @@
         \______\_|          \__/
   ---------------------------------------
 
-# Welcome to tfv!
-- tfv helps you to manage multiple versions of terraform with easy. Happy terraforming!
+# Happy terraforming!
+tfv helps you to manage multiple versions of terraform with ease.
+
+## Usage
+

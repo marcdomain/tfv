@@ -1,5 +1,5 @@
 {
-  "name": "tfversion",
+  "name": "tfv",
   "version": "1.0.0",
   "description": "Terraform version manager",
   "main": "index.js",
