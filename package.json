@@ -11,10 +11,11 @@
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "bin": {
-    "tfversion": "index.js"
+    "tfv": "index.js"
   },
   "keywords": [
     "Terraform",
+    "version",
     "store"
   ],
   "author": "marcdomain",
