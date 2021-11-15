@@ -15,11 +15,14 @@
   },
   "keywords": [
     "Terraform",
-    "version",
-    "store"
+    "version"
   ],
-  "author": "marcdomain",
+  "author": "Marcus Chukwuoma <marcus2cu@gmail.com> (https://github.com/marcdomain)",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/marcdomain/tfv.git"
+  },
   "dependencies": {
     "decompress": "^4.2.1",
     "yargs": "^17.2.1"
