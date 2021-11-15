@@ -59,7 +59,7 @@ tfv use <version>
 | x.x.^            | use latest version of series x.x          |
 | latest           | use latest version of terraform           |
 
-> **_NOTE:_** If you're using windows OS, you would be prompted for admin privilege. Accept it. This is a one-time request to set terraform location in you system path.
+> **_NOTE:_** If you're using windows OS, you would be prompted for admin privilege. Accept it. This is a one-time request to set terraform location in you system path. Unix machines would also get password prompt, as this requires permission to copy terraform to your bin directory.
 
 #### *list*
 ```sh
@@ -69,8 +69,8 @@ or
 ```sh
 tfv ls [option]
 ```
-| Option         | Alias    | Description                 |
-| ---------------|--------- | --------------------------------------------------------------------- |
-| `--local`      |  `-l`    | Lists all terraform versions installed locally                        |
-| `--remote`     |  `-r`    | Lists all terraform versions available remotely, on terraform server  |
-|                |          | Defaults to listing terraform versions installed locally              |
+| Option         | Description                                                            |
+| ---------------|----------------------------------------------------------------------- |
+| `--local`      |  Lists all terraform versions installed locally                        |
+| `--remote`     |  Lists all terraform versions available remotely, on terraform server  |
+|                |   Defaults to listing terraform versions installed locally             |
