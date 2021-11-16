@@ -69,8 +69,8 @@ or
 ```sh
 tfv ls [option]
 ```
-| Option         | Description                                                            |
-| ---------------|----------------------------------------------------------------------- |
-| `--local`      |  Lists all terraform versions installed locally                        |
-| `--remote`     |  Lists all terraform versions available remotely, on terraform server  |
-|                |   Defaults to listing terraform versions installed locally             |
+| Option         | Option Alias  |                Description                                             |
+| ---------------|---------------|----------------------------------------------------------------------- |
+| `--local`      |  `-l`         |  Lists all terraform versions installed locally                        |
+| `--remote`     |  `-r`         |  Lists all terraform versions available remotely, on terraform server  |
+|                |               |  Defaults to listing terraform versions installed locally              |
