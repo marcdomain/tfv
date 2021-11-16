@@ -9,27 +9,27 @@
         Happy terraforming 😍🥂!
   ---------------------------------------
 
-
-> **_NOTE:_** You need to have [nodejs](https://nodejs.org/en/download/) installed on your computer before you can use `tfv`.
-
+## Installation
+> **_NOTE:_** `tfv` should be installed `globally` so that it can be run from anywhere on your computer.
+```sh
+npm install -g tfv
+```
+or
+```sh
+npm i -g tfv
+```
 # Table of Contents
 
 <!--ts-->
 * [Table of Contents](#table-of-contents)
   * [Usage](#usage)
-    * [Installation](#installation)
     * [Modules](#modules)
       * [install](#install)
       * [use](#use)
       * [list](#list)
 <!--te-->
 
-## Usage
-### Installation
-> **_NOTE:_** `tfv` should be installed `globally` so that it can be run from anywhere on your computer.
-```sh
-npm install -g tfv
-```
+## Usag
 
 ### Modules
 #### *install*
