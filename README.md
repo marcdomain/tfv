@@ -29,9 +29,12 @@ npm i -g tfv
       * [list](#list)
 <!--te-->
 
-## Usag
+## Usage
+
+https://user-images.githubusercontent.com/25563661/142188036-4f2a8b65-1a3e-4298-95e0-9ed533c66a18.mp4
 
 ### Modules
+
 #### *install*
 ```sh
 tfv install <version>

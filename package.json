@@ -1,6 +1,6 @@
 {
   "name": "tfv",
-  "version": "1.7.0",
+  "version": "1.8.0",
   "description": "Terraform version manager",
   "main": "index.js",
   "directories": {
