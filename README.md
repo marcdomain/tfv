@@ -40,12 +40,12 @@ or
 ```sh
 tfv i <version>
 ```
-| Version          | Description                               |
-| ---------------- | ----------------------------------------- |
-| x.x.x            | Installs terraform version x.x.x          |
-| x^               | Installs latest version of series x       |
-| x.x.^            | Installs latest version of series x.x     |
-| latest           | Installs latest version of terraform      |
+| Version          | Description                                |
+| ---------------- | ------------------------------------------ |
+| x.x.x            | Installs terraform version x.x.x           |
+| x^               | Installs latest version of release x       |
+| x.x.^            | Installs latest version of release x.x     |
+| latest           | Installs latest version of terraform       |
 
 #### *use*
 ```sh
@@ -55,8 +55,6 @@ tfv use <version>
 | Version          | Description                               |
 | ---------------- | ----------------------------------------- |
 | x.x.x            | use terraform version x.x.x               |
-| x^               | use latest version of series x            |
-| x.x.^            | use latest version of series x.x          |
 | latest           | use latest version of terraform           |
 
 > **_NOTE:_** If you're using windows OS, you would be prompted for admin privilege. Accept it. This is a one-time request to set terraform location in you system path. Unix machines would also get password prompt, as this requires permission to copy terraform to your bin directory.
