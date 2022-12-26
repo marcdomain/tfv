@@ -18,7 +18,7 @@
 npm install -g tfv
 ```
 
-or
+Run with alias
 
 ```sh
 npm i -g tfv
@@ -34,6 +34,7 @@ npm i -g tfv
       * [use](#use)
       * [list](#list)
       * [remove](#remove)
+      * [auto-switch](#auto-switch)
 <!--te-->
 
 ## Usage
@@ -42,13 +43,13 @@ npm i -g tfv
 
 ### Modules
 
-#### _INSTALL_
+- #### _INSTALL_
 
 ```sh
 tfv install <version>
 ```
 
-or
+Run with alias
 
 ```sh
 tfv i <version>
@@ -61,7 +62,7 @@ tfv i <version>
 | x.x.^            | Installs latest version of release x.x     |
 | latest           | Installs latest version of terraform       |
 
-#### _USE_
+- #### _USE_
 
 ```sh
 tfv use <version>
@@ -74,31 +75,31 @@ tfv use <version>
 
 > **_NOTE:_** If you're using windows OS, you would be prompted for admin privilege. Accept it. This is a one-time request to set terraform location in you system path. Unix machines would also get password prompt, as this requires permission to copy terraform to your bin directory.
 
-#### _LIST_
+- #### _LIST_
 
 ```sh
 tfv list [option]
 ```
 
-or
+Run with alias
 
 ```sh
 tfv ls [option]
 ```
 
-| Option         | Option Alias  |                Description                                             |
-| ---------------|---------------|----------------------------------------------------------------------- |
-| `--local`      |  `-l`         |  Lists all terraform versions installed locally                        |
-| `--remote`     |  `-r`         |  Lists all terraform versions available remotely, on terraform server  |
-|                |               |  Defaults to listing terraform versions installed locally              |
+| Option         | Option Alias  |                Description                                                     |
+| ---------------|---------------|--------------------------------------------------------------------------------|
+|                |               |  Defaults to listing terraform versions installed locally (in tfv store)       |
+| `--local`      |  `-l`         |  Lists all terraform versions installed locally                                |
+| `--remote`     |  `-r`         |  Lists all terraform versions available remotely, on terraform server          |
 
-#### _REMOVE_
+- #### _REMOVE_
 
 ```sh
   tfv remove <version>
 ```
 
-or
+Run with alias
 
 ```sh
   tfv rm <version>
@@ -107,3 +108,19 @@ or
 | Version          | Description                               |
 | ---------------- | ----------------------------------------- |
 | x.x.x            | remove terraform version x.x.x            |
+
+- #### _AUTO-SWITCH_
+
+```sh
+  tfv auto-switch
+```
+
+Run with alias
+
+```sh
+  tfv as
+```
+
+| Description                                                                                                      |
+| ---------------------------------------------------------------------------------------------------------------- |
+| auto-detects your project terraform version, downloads it if it's not in tfv store, and switch to the version     |
