@@ -24,6 +24,36 @@ Run with alias
 npm i -g tfv
 ```
 
+## Help
+
+```sh
+tfv --help
+```
+
+Run with alias
+
+```sh
+tfv -h
+```
+
+> **_OUTPUT:_**
+
+```
+tfv <command>
+
+Commands:
+  tfv install <version>  Example: tfv install 1.0.11                [aliases: i]
+  tfv list [option]      Example: tfv list --local                 [aliases: ls]
+  tfv remove <version>   Example: tfv rm 1.0.11                    [aliases: rm]
+  tfv auto-switch        Example: tfv as                           [aliases: as]
+  tfv use <version>      Example: tfv use 1.0.11
+
+Options:
+  -h, --help     Show help                                             [boolean]
+  -v, --version  Show version number                                   [boolean]
+```
+
+
 # Table of Contents
 
 <!--ts-->
@@ -39,7 +69,7 @@ npm i -g tfv
 
 ## Usage
 
-<https://user-images.githubusercontent.com/25563661/142188036-4f2a8b65-1a3e-4298-95e0-9ed533c66a18.mp4>
+https://user-images.githubusercontent.com/25563661/209584148-05a86ee1-f497-4c6d-9894-d9cb464ef5b8.mp4
 
 ### Modules
 
