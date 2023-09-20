@@ -104,6 +104,7 @@ EXAMPLE:
 tfv install 1.5.7 -arch amd64
 ```
 
+> NOTE:  The default *system-architecture* is the architecture of your computer (arm64, amd64, x64, etc...)
 
 - #### _USE_
 
