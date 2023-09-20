@@ -42,8 +42,8 @@ tfv -h
 tfv <command>
 
 Commands:
-  tfv install <version>  Example: tfv install 1.0.11                [aliases: i]
-  tfv list [option]      Example: tfv list --local                 [aliases: ls]
+  tfv install <version> [option] Example: tfv install 1.0.11       [aliases: i]
+  tfv list [option]      Example: tfv list                         [aliases: ls]
   tfv remove <version>   Example: tfv rm 1.0.11                    [aliases: rm]
   tfv auto-switch        Example: tfv as                           [aliases: as]
   tfv use <version>      Example: tfv use 1.0.11
@@ -53,12 +53,14 @@ Options:
   -v, --version  Show version number                                   [boolean]
 ```
 
+# Usage
+
+https://github.com/marcdomain/tfv/assets/25563661/fa44f0f2-2dca-4f22-9fea-c74e4b8f767c
 
 # Table of Contents
 
 <!--ts-->
 * [Table of Contents](#table-of-contents)
-  * [Usage](#usage)
     * [Modules](#modules)
       * [install](#install)
       * [use](#use)
@@ -66,10 +68,6 @@ Options:
       * [remove](#remove)
       * [auto-switch](#auto-switch)
 <!--te-->
-
-## Usage
-
-https://user-images.githubusercontent.com/25563661/209584148-05a86ee1-f497-4c6d-9894-d9cb464ef5b8.mp4
 
 ### Modules
 
@@ -86,13 +84,7 @@ https://user-images.githubusercontent.com/25563661/209584148-05a86ee1-f497-4c6d-
 tfv install <version>
 ```
 
-Run with alias
-
-```sh
-tfv i <version> -a <system-architecture>
-```
-
-Run with system-architecture option
+Run with option
 
 ```sh
 tfv install <version> --arch <system-architecture>
@@ -117,7 +109,7 @@ tfv install 1.5.7 -arch amd64
 tfv use <version>
 ```
 
-> **_NOTE:_** If you're using windows OS, you would be prompted for admin privilege. Accept it. This is a one-time request to set terraform location in you system path. Unix machines would also get password prompt, as this requires permission to copy terraform to your bin directory.
+> **_NOTE:_** You would get a password prompt. Accept it. This is a one-time request to set the terraform executable in your system path.
 
 - #### _LIST_
 
