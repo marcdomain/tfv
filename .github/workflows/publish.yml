@@ -4,18 +4,23 @@ on:
   push:
     branches: [main]
 
+permissions:
+  contents: read
+  id-token: write
+
 jobs:
   publish:
     runs-on: ubuntu-latest
+
     steps:
-      - name: checkout
-        uses: actions/checkout@v2
-      - name: setup node
-        uses: actions/setup-node@v1
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
         with:
-          node-version: 12
+          node-version: 18
           registry-url: https://registry.npmjs.org
-      - name: publish
-        run: npm publish --access public
-        env:
-            NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+      - run: npm ci
+
+      - run: npm publish
+
