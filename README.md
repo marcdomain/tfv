@@ -42,11 +42,28 @@ tfv -h
 tfv <command>
 
 Commands:
-  tfv install <version> [option] Example: tfv install 1.0.11       [aliases: i]
-  tfv list [option]      Example: tfv list                         [aliases: ls]
-  tfv remove <version>   Example: tfv rm 1.0.11                    [aliases: rm]
-  tfv auto-switch        Example: tfv as                           [aliases: as]
-  tfv use <version>      Example: tfv use 1.0.11
+
+  tfv install <version> [option]  Install a terraform version [aliases: i]
+
+  tfv list [option]               List installed or available terraform versions [aliases: ls]
+
+  tfv remove <version>            Remove terraform versions from tfv store [aliases: rm]
+
+  tfv auto-switch                 Auto-detect and switch to your project terraform version [aliases: as]
+
+  tfv use <version>               Switch to a specified terraform version
+
+  tfv apply                       Run terraform apply with optional file-based targets.
+  Accepts all terraform flags after --
+  Example: tfv apply --file main.tf --file network.tf -- -auto-approve -target=<TARGET> -var="env=prod"
+
+  tfv destroy                     Run terraform destroy with optional file-based targets.
+  Accepts all terraform flags after --
+  Example: tfv destroy --file main.tf --file network.tf -- -auto-approve -target=<TARGET> -var="env=prod"
+
+  tfv plan                        Run terraform plan with optional file-based targets.
+  Accepts all terraform flags after --
+  Example: tfv plan --file main.tf --file network.tf -- -auto-approve -target=<TARGET> -var="env=prod"
 
 Options:
   -h, --help     Show help                                             [boolean]
@@ -67,6 +84,9 @@ https://github.com/marcdomain/tfv/assets/25563661/fa44f0f2-2dca-4f22-9fea-c74e4b
       * [list](#list)
       * [remove](#remove)
       * [auto-switch](#auto-switch)
+      * [plan](#plan)
+      * [apply](#apply)
+      * [destroy](#destroy)
 <!--te-->
 
 ### Modules
@@ -161,4 +181,52 @@ Run with alias
 
 ```sh
   tfv as
+```
+
+- #### _PLAN_
+
+Run terraform plan with optional file-based targets. Parses terraform files to extract resources, data sources, and modules as targets.
+
+```sh
+  tfv plan --file main.tf
+```
+
+With multiple files
+
+```sh
+  tfv plan --file main.tf --file network.tf
+```
+
+With extra terraform flags
+
+```sh
+  tfv plan --file main.tf -- -var="env=prod" -out=plan.out
+```
+
+- #### _APPLY_
+
+Run terraform apply with optional file-based targets.
+
+```sh
+  tfv apply --file main.tf
+```
+
+With auto-approve
+
+```sh
+  tfv apply --file main.tf -- -auto-approve
+```
+
+- #### _DESTROY_
+
+Run terraform destroy with optional file-based targets.
+
+```sh
+  tfv destroy --file main.tf
+```
+
+With auto-approve
+
+```sh
+  tfv destroy --file main.tf -- -auto-approve
 ```
