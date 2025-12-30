@@ -55,15 +55,18 @@ Commands:
 
   tfv apply                       Run terraform apply with optional file-based targets.
   Accepts all terraform flags after --
-  Example: tfv apply --file main.tf --file network.tf -- -auto-approve -target=<TARGET> -var="env=prod"
+  Example:
+  tfv apply --file main.tf --file network.tf -- -auto-approve -target=<TARGET> -var="env=prod"
 
   tfv destroy                     Run terraform destroy with optional file-based targets.
   Accepts all terraform flags after --
-  Example: tfv destroy --file main.tf --file network.tf -- -auto-approve -target=<TARGET> -var="env=prod"
+  Example:
+  tfv destroy --file main.tf --file network.tf -- -auto-approve -target=<TARGET> -var="env=prod"
 
   tfv plan                        Run terraform plan with optional file-based targets.
   Accepts all terraform flags after --
-  Example: tfv plan --file main.tf --file network.tf -- -auto-approve -target=<TARGET> -var="env=prod"
+  Example:
+  tfv plan --file main.tf --file network.tf -- -auto-approve -target=<TARGET> -var="env=prod"
 
 Options:
   -h, --help     Show help                                             [boolean]
