@@ -1,4 +1,4 @@
-# tfv — Terraform & OpenTofu Version Manager
+# tfv — Terraform & OpenTofu Version Manager for macOS, Linux & Windows
 
 ```
          _        ________        __
