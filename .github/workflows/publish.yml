@@ -2,26 +2,50 @@ name: Publish tfv to npm registry
 
 on:
   push:
-    branches: [main]
+    tags:
+      - 'v[0-9]+.[0-9]+.[0-9]+'   # only trigger on semver tags: v6.0.0, v6.1.0, etc.
 
 permissions:
   contents: read
   id-token: write
 
 jobs:
-  publish:
+  test:
     runs-on: ubuntu-latest
-
     steps:
       - uses: actions/checkout@v4
 
       - uses: actions/setup-node@v4
         with:
-          node-version: 18
+          node-version: 22
+          cache: 'npm'
+
+      - run: npm ci
+
+      - run: npm test
+
+  publish:
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
           registry-url: https://registry.npmjs.org
           cache: 'npm'
 
       - run: npm ci
+
+      - name: Verify package version matches git tag
+        run: |
+          PKG_VERSION="v$(node -p "require('./package.json').version")"
+          GIT_TAG="${{ github.ref_name }}"
+          if [ "$PKG_VERSION" != "$GIT_TAG" ]; then
+            echo "Version mismatch: package.json=$PKG_VERSION, tag=$GIT_TAG"
+            exit 1
+          fi
 
       - run: npm publish --access public
         env:
