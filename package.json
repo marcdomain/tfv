@@ -1,25 +1,24 @@
 {
   "name": "tfv",
-  "version": "5.0.1",
+  "version": "6.0.0",
   "publishConfig": {
     "access": "public",
     "provenance": true
   },
-  "description": "Terraform version manager",
+  "description": "Terraform & OpenTofu version manager",
   "main": "index.js",
-  "directories": {
-    "lib": "lib",
-    "store": "store"
-  },
   "scripts": {
-    "postinstall": "node lib/utils/postInstall.js"
+    "postinstall": "node lib/utils/postInstall.js",
+    "test": "jest --testPathPatterns=test/"
   },
   "bin": {
     "tfv": "index.js"
   },
   "keywords": [
     "Terraform",
-    "version"
+    "OpenTofu",
+    "version",
+    "manager"
   ],
   "author": "Marcus Chukwuoma <marcus2cu@gmail.com> (https://github.com/marcdomain)",
   "license": "MIT",
@@ -28,7 +27,10 @@
     "url": "https://github.com/marcdomain/tfv.git"
   },
   "dependencies": {
-    "decompress": "^4.2.1",
+    "adm-zip": "^0.5.10",
     "yargs": "^17.2.1"
+  },
+  "devDependencies": {
+    "jest": "^30.4.2"
   }
 }
