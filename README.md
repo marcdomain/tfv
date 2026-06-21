@@ -1,6 +1,6 @@
 # tfv — Terraform & OpenTofu Version Manager for macOS, Linux & Windows
 
-```
+```text
          _        ________        __
        _| |__   / _____|\ \      / /
       |_  ___\ | |___    \ \    / /
@@ -30,7 +30,7 @@ npm install -g tfv
 
 ## How it works
 
-```
+```text
 npm install -g tfv
        │
        ▼
@@ -63,7 +63,7 @@ Both `terraform` and `tfv` commands always use the **exact same binary**.
 
 ## Store layout
 
-```
+```text
 ~/.tfv/
   bin/
     terraform          ← active terraform binary (no sudo, no symlinks)
@@ -137,6 +137,7 @@ Reads version from (in priority order):
 Wraps `cd` so that entering a directory automatically switches the terraform version — but **only if the directory looks like a terraform project**. Non-terraform folders have zero overhead (one filesystem check, no subprocess).
 
 A directory is considered a terraform project if it contains:
+
 - a `.terraform-version` file, **or**
 - any `*.tf` files
 
@@ -151,19 +152,21 @@ Setup (one-time, add to your shell config):
 
 ```sh
 # Bash
-echo 'eval "$(tfv shell-init bash)"' >> ~/.bashrc
+printf '\neval "$(tfv shell-init bash)"\n' >> ~/.bashrc
 
 # Zsh
-echo 'eval "$(tfv shell-init zsh)"' >> ~/.zshrc
+printf '\neval "$(tfv shell-init zsh)"\n' >> ~/.zshrc
 
 # Fish
-echo 'tfv shell-init fish | source' >> ~/.config/fish/config.fish
+printf '\ntfv shell-init fish | source\n' >> ~/.config/fish/config.fish
 
 # PowerShell
-echo 'Invoke-Expression (tfv shell-init powershell | Out-String)' >> $PROFILE
+Add-Content $PROFILE "`nInvoke-Expression (tfv shell-init powershell | Out-String)"
 ```
 
 After setup, entering a terraform project switches the version automatically — no manual `tfv as` needed.
+
+`shell-init` also installs **tab completions** for all `tfv` commands and installed versions. After running the setup command above, `tfv <tab>` will complete commands, `tfv use <tab>` will complete installed versions, and `tfv --provider <tab>` will complete provider names.
 
 ---
 
@@ -188,7 +191,8 @@ tfv current --provider tofu
 ```
 
 Example output:
-```
+
+```text
 Active terraform version: 1.9.0
 Binary: /Users/you/.tfv/bin/terraform
 Reported: Terraform v1.9.0
@@ -231,6 +235,75 @@ tfv rm 1.8.0 --provider tofu
 ```
 
 Warns if you're removing the currently active version.
+
+---
+
+### Prune
+
+Remove all non-active versions at once to free disk space.
+
+```sh
+tfv prune                            # remove everything except the active version
+tfv prune --keep 2                   # keep the 2 most recent + the active version
+tfv prune --provider tofu
+tfv prune --yes                      # skip confirmation prompt
+```
+
+The active version is always kept regardless of `--keep`.
+
+---
+
+### Exec
+
+Run a single command with a specific installed version **without** changing the active version. Useful for cross-version testing and CI.
+
+```sh
+tfv exec 1.9.0 -- version
+tfv exec 1.8.0 -- plan -var="env=prod"
+tfv exec 1.7.3 --provider tofu -- validate
+```
+
+Pass all terraform/tofu flags after `--`.
+
+---
+
+### Doctor
+
+Run a full health check: store directories, active binaries, PATH order, PATH conflicts, and shell config.
+
+```sh
+tfv doctor
+```
+
+Example output:
+
+```text
+tfv doctor
+
+Store
+  ✔  ~/.tfv/store/terraform/ exists
+  ✔  ~/.tfv/store/opentofu/ exists
+
+Active versions
+  ✔  terraform: active version is 1.9.0
+  ✔  terraform: binary exists
+  ✔  terraform: executes  (Terraform v1.9.0)
+  –  tofu: not set up (no versions installed)
+
+PATH
+  ✔  ~/.tfv/bin is in PATH
+  ✔  ~/.tfv/bin precedes system dirs in PATH
+  ✔  'terraform' resolves to tfv-managed binary
+  ✔  PATH block found in shell config (~/.zshrc)
+
+Cache
+  ✔  terraform version cache exists
+  –  opentofu version cache not yet created
+
+All checks passed. tfv is healthy.
+```
+
+Exits with code 1 if any issue is found.
 
 ---
 
