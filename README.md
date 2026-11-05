@@ -24,7 +24,9 @@
 npm install -g tfv
 ```
 
-`tfv` automatically adds `~/.tfv/bin` to your PATH on install (shell configs + Windows User PATH). Restart your terminal once after install.
+`tfv` automatically adds `~/.tfv/bin` to your PATH on install (shell configs, fish `conf.d`, or Windows User PATH). Restart your terminal once after install.
+
+If your package manager skips install scripts (pnpm 10, Bun, Yarn Berry, `--ignore-scripts`) or you installed with `sudo`, the same setup runs automatically the first time you run `tfv`.
 
 ---
 
@@ -34,7 +36,7 @@ npm install -g tfv
 npm install -g tfv
        │
        ▼
-postInstall.js
+postInstall.js  (or first `tfv` run, if install scripts were skipped)
   ├── creates ~/.tfv/bin/, ~/.tfv/store/, ~/.tfv/cache/
   └── adds ~/.tfv/bin to PATH (shell configs / Windows registry)
        │
