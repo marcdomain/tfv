@@ -1,6 +1,6 @@
 {
   "name": "tfv",
-  "version": "6.1.5",
+  "version": "6.2.0",
   "publishConfig": {
     "access": "public",
     "provenance": true
