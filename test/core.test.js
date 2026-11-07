@@ -142,3 +142,22 @@ describe('installVersion', () => {
     expect(result).toMatchObject({ provider: 'terraform', version: '1.9.8', alreadyInstalled: true });
   });
 });
+
+describe('findBinaryEntry', () => {
+  const { findBinaryEntry } = require('../lib/core/install');
+  const entry = (entryName, isDirectory = false) => ({ entryName, isDirectory });
+
+  test('picks the binary, not LICENSE (OpenTofu zips list LICENSE first)', () => {
+    const entries = [entry('CHANGELOG.md'), entry('LICENSE'), entry('README.md'), entry('tofu')];
+    expect(findBinaryEntry(entries, 'opentofu').entryName).toBe('tofu');
+  });
+
+  test('terraform and Windows .exe', () => {
+    expect(findBinaryEntry([entry('LICENSE.txt'), entry('terraform')], 'terraform').entryName).toBe('terraform');
+    expect(findBinaryEntry([entry('LICENSE'), entry('tofu.exe')], 'opentofu').entryName).toBe('tofu.exe');
+  });
+
+  test('null when the binary is missing', () => {
+    expect(findBinaryEntry([entry('LICENSE'), entry('README.md')], 'opentofu')).toBeNull();
+  });
+});
