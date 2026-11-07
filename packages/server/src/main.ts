@@ -4,7 +4,16 @@ import { mkdirSync } from 'node:fs';
 import { loadConfig } from './config.ts';
 import { log, addSecret, addSecretsFromEnv } from './log.ts';
 
-const config = loadConfig();
+// Configuration mistakes get one clear line, not a stack trace.
+let config: ReturnType<typeof loadConfig>;
+try {
+  config = loadConfig();
+} catch (err) {
+  const e = err as NodeJS.ErrnoException;
+  const message = e.code === 'ENOENT' ? `cannot read ${e.path}: file not found` : e.message;
+  log.error(`tfv-server cannot start: ${message}`);
+  process.exit(1);
+}
 
 // tfv's core keeps tool binaries under TFV_HOME; it must be set before the core loads.
 process.env.TFV_HOME = join(config.dataDir, 'tfv');

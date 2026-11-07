@@ -1,0 +1,186 @@
+{{- include "tfv.validate" . -}}
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ include "tfv.fullname" . }}
+  labels:
+    {{- include "tfv.labels" . | nindent 4 }}
+spec:
+  # One replica: state (locks, runs) lives in SQLite on the volume.
+  replicas: 1
+  serviceName: {{ include "tfv.fullname" . }}
+  selector:
+    matchLabels:
+      {{- include "tfv.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "tfv.selectorLabels" . | nindent 8 }}
+        {{- with .Values.podLabels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      annotations:
+        checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
+        {{- if not .Values.github.existingSecret }}
+        checksum/secret: {{ include (print $.Template.BasePath "/secret.yaml") . | sha256sum }}
+        {{- end }}
+        {{- with .Values.podAnnotations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+    spec:
+      serviceAccountName: {{ include "tfv.serviceAccountName" . }}
+      terminationGracePeriodSeconds: {{ .Values.terminationGracePeriodSeconds }}
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: tfv-server
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          securityContext:
+            {{- toYaml .Values.securityContext | nindent 12 }}
+          ports:
+            - name: http
+              containerPort: 8080
+          env:
+            - name: TFV_PORT
+              value: "8080"
+            - name: TFV_DATA_DIR
+              value: /data
+            - name: HOME
+              value: /home/tfv
+            - name: TFV_GITHUB_APP_ID
+              value: {{ .Values.github.appId | quote }}
+            {{- with .Values.github.apiUrl }}
+            - name: TFV_GITHUB_API_URL
+              value: {{ . | quote }}
+            {{- end }}
+            - name: TFV_GITHUB_PRIVATE_KEY_FILE
+              value: /secrets/github/private-key
+            - name: TFV_GITHUB_WEBHOOK_SECRET_FILE
+              value: /secrets/github/webhook-secret
+            {{- with .Values.config.repoAllowlist }}
+            - name: TFV_REPO_ALLOWLIST
+              value: {{ join "," . | quote }}
+            {{- end }}
+            {{- if .Values.repos }}
+            - name: TFV_REPOS_CONFIG
+              value: /config/repos.yaml
+            {{- end }}
+            - name: TFV_REQUIRE_APPLY_PROJECT
+              value: {{ .Values.config.requireApplyProject | quote }}
+            - name: TFV_PARALLELISM
+              value: {{ .Values.config.parallelism | quote }}
+            - name: TFV_RUN_TIMEOUT_SECONDS
+              value: {{ .Values.config.runTimeoutSeconds | quote }}
+            - name: TFV_DEFAULT_VERSION
+              value: {{ .Values.config.defaultVersion | quote }}
+            - name: TFV_DRIFT
+              value: {{ .Values.config.drift | quote }}
+            - name: TFV_ATLANTIS_COMPAT
+              value: {{ .Values.config.atlantisCompat | quote }}
+            - name: TFV_LOG_LEVEL
+              value: {{ .Values.config.logLevel | quote }}
+            {{- with .Values.config.preinstall }}
+            - name: TFV_PREINSTALL
+              value: {{ join "," . | quote }}
+            {{- end }}
+            {{- with (include "tfv.publicUrl" .) }}
+            - name: TFV_PUBLIC_URL
+              value: {{ . | quote }}
+            {{- end }}
+            {{- with .Values.api.existingSecret }}
+            - name: TFV_API_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ . }}
+                  key: api-token
+            {{- end }}
+            {{- with .Values.extraEnv }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          {{- with .Values.extraEnvFrom }}
+          envFrom:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          startupProbe:
+            httpGet: { path: /healthz, port: http }
+            periodSeconds: 5
+            failureThreshold: 30
+          livenessProbe:
+            httpGet: { path: /healthz, port: http }
+            periodSeconds: 20
+          readinessProbe:
+            httpGet: { path: /readyz, port: http }
+            periodSeconds: 10
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+          volumeMounts:
+            - name: data
+              mountPath: /data
+            - name: github
+              mountPath: /secrets/github
+              readOnly: true
+            {{- if .Values.repos }}
+            - name: config
+              mountPath: /config
+              readOnly: true
+            {{- end }}
+            # Writable scratch space with a read-only root filesystem.
+            - name: tmp
+              mountPath: /tmp
+            - name: home
+              mountPath: /home/tfv
+      volumes:
+        - name: github
+          secret:
+            secretName: {{ include "tfv.githubSecretName" . }}
+            defaultMode: 0440
+        {{- if .Values.repos }}
+        - name: config
+          configMap:
+            name: {{ include "tfv.fullname" . }}
+        {{- end }}
+        - name: tmp
+          emptyDir: {}
+        - name: home
+          emptyDir: {}
+        {{- if not .Values.persistence.enabled }}
+        - name: data
+          emptyDir: {}
+        {{- else if .Values.persistence.existingClaim }}
+        - name: data
+          persistentVolumeClaim:
+            claimName: {{ .Values.persistence.existingClaim }}
+        {{- end }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+  {{- if and .Values.persistence.enabled (not .Values.persistence.existingClaim) }}
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+        labels:
+          {{- include "tfv.selectorLabels" . | nindent 10 }}
+      spec:
+        accessModes:
+          {{- toYaml .Values.persistence.accessModes | nindent 10 }}
+        {{- with .Values.persistence.storageClass }}
+        storageClassName: {{ . | quote }}
+        {{- end }}
+        resources:
+          requests:
+            storage: {{ .Values.persistence.size }}
+  {{- end }}

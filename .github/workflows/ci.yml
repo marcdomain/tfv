@@ -73,6 +73,43 @@ jobs:
       - name: Test
         run: npm test --workspace tfv-server
 
+  server-image:
+    name: tfv-server image, e2e and Helm on kind
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: azure/setup-helm@v4
+
+      - name: Lint chart
+        run: |
+          helm lint charts/tfv-server --set github.appId=1 --set github.existingSecret=s --set 'config.repoAllowlist={github.com/acme/*}'
+          # Missing required values must fail with a clear message.
+          if helm template t charts/tfv-server > /dev/null 2> err.txt; then echo "expected a failure"; exit 1; fi
+          grep -q 'github.appId is required' err.txt
+
+      - name: Build image
+        run: docker build -t tfv-server:ci .
+
+      - name: End-to-end (mock GitHub, real git and terraform)
+        run: packages/server/e2e/run.sh tfv-server:ci
+
+      - uses: helm/kind-action@v1
+        with:
+          cluster_name: tfv-ci
+
+      - name: Install chart and run helm test
+        run: |
+          kind load docker-image tfv-server:ci --name tfv-ci
+          openssl genrsa -out app.pem 2048
+          helm install tfv charts/tfv-server -n tfv --create-namespace --wait --timeout 3m \
+            --set image.repository=tfv-server --set image.tag=ci --set image.pullPolicy=Never \
+            --set github.appId=1 --set-file github.privateKey=app.pem --set github.webhookSecret=ci \
+            --set 'config.repoAllowlist={github.com/acme/*}' --set config.requireApplyProject=true \
+            --set persistence.size=1Gi --set terminationGracePeriodSeconds=30
+          helm test tfv -n tfv
+          kubectl -n tfv logs statefulset/tfv-tfv-server | tail -20
+
   package:
     runs-on: ubuntu-latest
     steps:

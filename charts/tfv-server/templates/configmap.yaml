@@ -1,0 +1,11 @@
+{{- if .Values.repos }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "tfv.fullname" . }}
+  labels:
+    {{- include "tfv.labels" . | nindent 4 }}
+data:
+  repos.yaml: |
+    {{- toYaml .Values.repos | nindent 4 }}
+{{- end }}

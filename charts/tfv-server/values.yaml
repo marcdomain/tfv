@@ -1,0 +1,127 @@
+# tfv-server Helm values. Everything here maps to the server's env vars or repos.yaml.
+
+image:
+  repository: ghcr.io/marcdomain/tfv-server
+  tag: ""                       # defaults to the chart's appVersion
+  pullPolicy: IfNotPresent
+imagePullSecrets: []
+
+github:
+  appId: ""                     # required
+  apiUrl: ""                    # GitHub Enterprise Server, e.g. https://ghe.acme.com/api/v3
+  # Use an existing Secret with keys `private-key` and `webhook-secret`...
+  existingSecret: ""
+  # ...or let the chart create one (avoid committing these to git).
+  privateKey: ""
+  webhookSecret: ""
+
+config:
+  repoAllowlist: []             # e.g. ["github.com/acme/*"]; or list repos in `repos` below
+  requireApplyProject: false    # true: no bare `tfv apply`, one project at a time with -p
+  parallelism: 4
+  runTimeoutSeconds: 3600
+  defaultVersion: latest        # tool version when a project pins none
+  preinstall: []                # e.g. ["terraform@1.9.8", "tofu@1.8.5", "terragrunt@0.83.2"]
+  drift: true                   # run drift schedules
+  atlantisCompat: true          # also answer `atlantis plan` / `atlantis apply`
+  publicUrl: ""                 # defaults to the first ingress host
+  logLevel: info
+
+# Contents of repos.yaml: rules, approvers, channels, people, drift schedules.
+# See packages/server/README.md. Mounted at /config/repos.yaml.
+repos: {}
+#  channels:
+#    infra-alerts: { type: slack, channel: "#infra-drift", token_env: TFV_SLACK_TOKEN }
+#  repos:
+#    - id: github.com/acme/*
+#      require_apply_project: true
+#      projects:
+#        - match: prod/**
+#          permissions: { apply: [team:platform-admins] }
+#          approvals: [{ from: team:platform-admins, count: 2 }]
+
+api:
+  # Turns on /api/* with a Bearer token. Secret key: `api-token`.
+  existingSecret: ""
+
+# Cloud credentials, chat tokens (TFV_SLACK_TOKEN, TFV_TEAMS_WEBHOOK), etc.
+extraEnv: []
+#  - name: AWS_REGION
+#    value: eu-central-1
+extraEnvFrom: []
+#  - secretRef:
+#      name: tfv-chat-tokens
+
+persistence:
+  enabled: true
+  size: 20Gi                    # checkouts, saved plans, tool binaries, provider cache, database
+  storageClass: ""
+  accessModes: [ReadWriteOnce]
+  existingClaim: ""
+
+service:
+  type: ClusterIP
+  port: 80
+
+ingress:
+  enabled: false
+  className: ""
+  annotations: {}
+  hosts:
+    - host: tfv.example.com
+      paths:
+        - path: /
+          pathType: Prefix
+  tls: []
+
+serviceAccount:
+  create: true
+  name: ""
+  annotations: {}               # e.g. eks.amazonaws.com/role-arn for IRSA
+
+resources:
+  requests:
+    cpu: 250m
+    memory: 512Mi
+  limits:
+    memory: 2Gi
+
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 10001
+  runAsGroup: 10001
+  fsGroup: 10001
+  fsGroupChangePolicy: OnRootMismatch
+  seccompProfile:
+    type: RuntimeDefault
+
+securityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: true
+  capabilities:
+    drop: [ALL]
+
+# Give running plans and applies time to finish on upgrades and node drains.
+terminationGracePeriodSeconds: 3600
+
+podAnnotations: {}
+podLabels: {}
+nodeSelector: {}
+tolerations: []
+affinity: {}
+
+podDisruptionBudget:
+  enabled: false
+
+serviceMonitor:
+  enabled: false
+  interval: 30s
+  labels: {}
+
+networkPolicy:
+  enabled: false
+  # Namespaces allowed to reach the server (your ingress controller, Prometheus).
+  ingressFrom: []
+  #  - namespaceSelector:
+  #      matchLabels:
+  #        kubernetes.io/metadata.name: ingress-nginx

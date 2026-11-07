@@ -1,0 +1,17 @@
+tfv server is starting.
+
+1. Point your GitHub App's webhook at:
+   {{- with (include "tfv.publicUrl" .) }}
+     {{ . }}/events/github
+   {{- else }}
+     https://<your-host>/events/github   (enable ingress or set config.publicUrl)
+   {{- end }}
+
+2. Check it:
+     kubectl -n {{ .Release.Namespace }} port-forward svc/{{ include "tfv.fullname" . }} 8080:{{ .Values.service.port }}
+     curl localhost:8080/healthz
+
+3. Comment `tfv help` on a pull request.
+{{- if .Values.config.requireApplyProject }}
+   Apply is one project at a time here: `tfv apply -p <project>`.
+{{- end }}
