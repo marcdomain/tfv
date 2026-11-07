@@ -18,6 +18,9 @@
     "index.js",
     "lib/"
   ],
+  "workspaces": [
+    "packages/*"
+  ],
   "keywords": [
     "Terraform",
     "OpenTofu",
@@ -37,5 +40,10 @@
   },
   "devDependencies": {
     "jest": "^30.4.2"
+  },
+  "jest": {
+    "roots": [
+      "<rootDir>/test"
+    ]
   }
 }

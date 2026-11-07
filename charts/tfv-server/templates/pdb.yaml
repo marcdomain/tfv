@@ -1,0 +1,14 @@
+{{- if .Values.podDisruptionBudget.enabled }}
+# Stops voluntary evictions (node drains) from killing a running apply.
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ include "tfv.fullname" . }}
+  labels:
+    {{- include "tfv.labels" . | nindent 4 }}
+spec:
+  maxUnavailable: 0
+  selector:
+    matchLabels:
+      {{- include "tfv.selectorLabels" . | nindent 6 }}
+{{- end }}

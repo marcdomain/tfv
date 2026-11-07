@@ -1,0 +1,11 @@
+**/node_modules
+.git
+.github
+.claude
+.vscode
+store
+test
+packages/server/test
+demo.gif
+demo.tape
+*.md

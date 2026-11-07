@@ -1,0 +1,98 @@
+name: Release tfv-server image and chart
+
+on:
+  push:
+    tags:
+      - 'server-v[0-9]+.[0-9]+.[0-9]+'   # e.g. server-v0.1.0 (CLI releases use v*)
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.v.outputs.version }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Tag must be on main and match the versions in the repo
+        id: v
+        run: |
+          git fetch origin main
+          git merge-base --is-ancestor "$GITHUB_SHA" origin/main || { echo "tag is not on main"; exit 1; }
+          VERSION="${GITHUB_REF_NAME#server-v}"
+          PKG=$(node -p "require('./packages/server/package.json').version")
+          APP=$(grep '^appVersion:' charts/tfv-server/Chart.yaml | tr -d '"' | awk '{print $2}')
+          CHART=$(grep '^version:' charts/tfv-server/Chart.yaml | awk '{print $2}')
+          for v in "$PKG" "$APP" "$CHART"; do
+            [ "$v" = "$VERSION" ] || { echo "version mismatch: tag=$VERSION package=$PKG appVersion=$APP chart=$CHART"; exit 1; }
+          done
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
+  test:
+    needs: verify
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 26
+          cache: 'npm'
+      - run: npm ci --ignore-scripts
+      - run: npm run typecheck --workspace tfv-server
+      - run: npm test --workspace tfv-server
+      - run: docker build -t tfv-server:release-test . && packages/server/e2e/run.sh tfv-server:release-test
+
+  image:
+    needs: [verify, test]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+      id-token: write          # keyless signing
+    steps:
+      - uses: actions/checkout@v5
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Build and push (amd64 + arm64, SBOM and provenance)
+        id: build
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          push: true
+          sbom: true
+          provenance: mode=max
+          tags: |
+            ghcr.io/${{ github.repository_owner }}/tfv-server:${{ needs.verify.outputs.version }}
+            ghcr.io/${{ github.repository_owner }}/tfv-server:latest
+          labels: |
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+            org.opencontainers.image.version=${{ needs.verify.outputs.version }}
+            org.opencontainers.image.licenses=MIT
+      - uses: sigstore/cosign-installer@v3
+      - name: Sign the image
+        run: cosign sign --yes "ghcr.io/${{ github.repository_owner }}/tfv-server@${{ steps.build.outputs.digest }}"
+
+  chart:
+    needs: [verify, image]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v5
+      - uses: azure/setup-helm@v4
+      - name: Package and push the chart
+        run: |
+          echo "${{ secrets.GITHUB_TOKEN }}" | helm registry login ghcr.io -u "${{ github.actor }}" --password-stdin
+          helm package charts/tfv-server --destination dist
+          helm push "dist/tfv-server-${{ needs.verify.outputs.version }}.tgz" "oci://ghcr.io/${{ github.repository_owner }}/charts"

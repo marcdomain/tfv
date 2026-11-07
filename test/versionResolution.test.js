@@ -1,44 +1,4 @@
-// Test the resolveConstraint logic from switch.js by extracting it
-
-// Inline the function for isolated testing
-const resolveConstraint = (constraint, versions) => {
-  const parts = constraint.split(',').map(s => s.trim());
-
-  return versions.find(v => {
-    return parts.every(part => {
-      const m = part.match(/^(~>|>=|<=|!=|>|<|=)?\s*(\d+(?:\.\d+)*)/);
-      if (!m) return false;
-      const [, op = '=', req] = m;
-
-      const vParts = v.split('.').map(n => parseInt(n, 10) || 0);
-      const rParts = req.split('.').map(n => parseInt(n, 10) || 0);
-
-      const cmp = () => {
-        for (let i = 0; i < 3; i++) {
-          const diff = (vParts[i] || 0) - (rParts[i] || 0);
-          if (diff !== 0) return diff;
-        }
-        return 0;
-      };
-
-      switch (op) {
-        case '~>': {
-          const segCount = rParts.length;
-          for (let i = 0; i < segCount - 1; i++) {
-            if ((vParts[i] || 0) !== (rParts[i] || 0)) return false;
-          }
-          return (vParts[segCount - 1] || 0) >= (rParts[segCount - 1] || 0);
-        }
-        case '>=': return cmp() >= 0;
-        case '>':  return cmp() > 0;
-        case '<=': return cmp() <= 0;
-        case '<':  return cmp() < 0;
-        case '!=': return cmp() !== 0;
-        default:   return cmp() === 0;
-      }
-    });
-  }) || null;
-};
+const { resolveConstraint } = require('../lib/core/resolve');
 
 const versions = ['1.9.0', '1.8.5', '1.8.0', '1.7.3', '1.7.0', '1.6.6', '1.5.7', '0.15.0'];
 

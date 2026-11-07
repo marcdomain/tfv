@@ -1,0 +1,10 @@
+terraform_data.worker[1]: Refreshing state... [id=b608fdf6-ed52-5f54-f852-3c5cf0c04414]
+terraform_data.database: Refreshing state... [id=023a9624-b7f6-b13c-8d91-d6a0263b1fe3]
+terraform_data.cdn: Refreshing state... [id=658b6c81-3687-65f9-f30b-764ed1741d1b]
+terraform_data.worker[0]: Refreshing state... [id=0ab1f316-d79c-7919-5e9f-1c5a071d8bc1]
+terraform_data.app_config: Refreshing state... [id=4f4ac420-a1bc-deaa-7ecb-a33489807d3a]
+
+No changes. Your infrastructure matches the configuration.
+
+Terraform has compared your real infrastructure against your configuration
+and found no differences, so no changes are needed.
