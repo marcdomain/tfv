@@ -1,0 +1,8 @@
+
+Error: Reference to undeclared input variable
+
+  on broken.tf line 1, in resource "terraform_data" "x":
+   1: resource "terraform_data" "x" { input = var.missing }
+
+An input variable with the name "missing" has not been declared. This
+variable can be declared with a variable "missing" {} block.

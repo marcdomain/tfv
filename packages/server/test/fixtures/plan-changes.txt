@@ -1,0 +1,68 @@
+terraform_data.legacy_queue: Refreshing state... [id=1bdddee1-aac5-0ab0-9718-f8d145b20d73]
+terraform_data.database: Refreshing state... [id=2b2e7d45-6952-fb53-6c68-17d6d95bfe3c]
+terraform_data.app_config: Refreshing state... [id=4f4ac420-a1bc-deaa-7ecb-a33489807d3a]
+
+Terraform used the selected providers to generate the following execution
+plan. Resource actions are indicated with the following symbols:
+  + create
+  ~ update in-place
+  - destroy
+-/+ destroy and then create replacement
+
+Terraform will perform the following actions:
+
+  # terraform_data.app_config will be updated in-place
+  ~ resource "terraform_data" "app_config" {
+        id     = "4f4ac420-a1bc-deaa-7ecb-a33489807d3a"
+      ~ input  = {
+          ~ image    = "app:1.4.0" -> "app:1.5.0"
+          ~ replicas = 2 -> 3
+        }
+      ~ output = {
+          - image    = "app:1.4.0"
+          - replicas = 2
+        } -> (known after apply)
+    }
+
+  # terraform_data.cdn will be created
+  + resource "terraform_data" "cdn" {
+      + id     = (known after apply)
+      + input  = "cdn.example.com"
+      + output = (known after apply)
+    }
+
+  # terraform_data.database must be replaced
+-/+ resource "terraform_data" "database" {
+      ~ id               = "2b2e7d45-6952-fb53-6c68-17d6d95bfe3c" -> (known after apply)
+      ~ output           = "db.internal" -> (known after apply)
+      ~ triggers_replace = "postgres-15" -> "postgres-16"
+        # (1 unchanged attribute hidden)
+    }
+
+  # terraform_data.legacy_queue will be destroyed
+  # (because terraform_data.legacy_queue is not in configuration)
+  - resource "terraform_data" "legacy_queue" {
+      - id     = "1bdddee1-aac5-0ab0-9718-f8d145b20d73" -> null
+      - input  = "sqs-legacy" -> null
+      - output = "sqs-legacy" -> null
+    }
+
+  # terraform_data.worker[0] will be created
+  + resource "terraform_data" "worker" {
+      + id     = (known after apply)
+      + input  = "worker-0"
+      + output = (known after apply)
+    }
+
+  # terraform_data.worker[1] will be created
+  + resource "terraform_data" "worker" {
+      + id     = (known after apply)
+      + input  = "worker-1"
+      + output = (known after apply)
+    }
+
+Plan: 4 to add, 1 to change, 2 to destroy.
+
+Changes to Outputs:
+  + cdn_domain = (known after apply)
+  ~ endpoint   = "db.internal" -> (known after apply)
