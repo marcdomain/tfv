@@ -1,4 +1,4 @@
-# tfv — Terraform & OpenTofu Version Manager for macOS, Linux & Windows
+# tfv — Terraform, OpenTofu & Terragrunt Version Manager for macOS, Linux & Windows
 
 ```text
          _        ________        __
@@ -12,7 +12,7 @@
     ---------------------------------
 ```
 
-`tfv` lets you install, switch, and manage multiple versions of **Terraform** and **OpenTofu** without `sudo`. All binaries live in `~/.tfv/` — upgrading `tfv` itself never wipes your installed versions.
+`tfv` lets you install, switch, and manage multiple versions of **Terraform**, **OpenTofu** and **Terragrunt** without `sudo`. All binaries live in `~/.tfv/` — upgrading `tfv` itself never wipes your installed versions.
 
 ![tfv demo](https://raw.githubusercontent.com/marcdomain/tfv/main/demo.gif)
 
@@ -70,6 +70,7 @@ Both `terraform` and `tfv` commands always use the **exact same binary**.
   bin/
     terraform          ← active terraform binary (no sudo, no symlinks)
     tofu               ← active opentofu binary
+    terragrunt         ← active terragrunt binary
   store/
     terraform/
       1.9.0            ← installed versions (binary renamed to version number)
@@ -78,10 +79,13 @@ Both `terraform` and `tfv` commands always use the **exact same binary**.
     opentofu/
       1.8.0
       arch.json
+    terragrunt/
+      1.2.1
+      arch.json
   cache/
     terraform-versions.json   ← remote list cached for 1 hour
     opentofu-versions.json
-  active.json          ← { "terraform": "1.9.0", "opentofu": null }
+  active.json          ← { "terraform": "1.9.0", "opentofu": null, "terragrunt": "1.2.1" }
 ```
 
 ---
@@ -210,12 +214,13 @@ PATH OK — 'terraform' resolves to tfv-managed binary
 
 ### Pin version
 
-Writes a `.terraform-version` file in the current directory so teammates get the same version via `tfv auto-switch`:
+Writes a version file in the current directory so teammates get the same version via `tfv auto-switch`. Each tool has its own file, so pinning one never switches another:
 
 ```sh
-tfv pin                              # pin currently active version
+tfv pin                              # pin currently active version → .terraform-version
 tfv pin 1.9.0                        # pin a specific version
-tfv pin --provider tofu
+tfv pin --provider tofu              # → .opentofu-version
+tfv pin --provider terragrunt        # → .terragrunt-version
 ```
 
 ---
@@ -352,6 +357,66 @@ tfv plan --provider tofu
 ```
 
 OpenTofu binaries are stored separately from Terraform in `~/.tfv/store/opentofu/` and activated as `~/.tfv/bin/tofu`.
+
+---
+
+## Terragrunt support
+
+Terragrunt works the same way via `--provider terragrunt` (or `-p tg`):
+
+```sh
+tfv install latest -p tg
+tfv use 1.2.1 -p tg
+tfv list --remote -p tg
+tfv pin -p tg                        # writes .terragrunt-version
+tfv auto-switch -p tg
+```
+
+`tfv auto-switch -p tg` (and the shell hook) reads, in order: `.terragrunt-version`, `.tgswitchrc`, a `terragrunt` line in `.tool-versions`, then `terragrunt_version_constraint` in `terragrunt.hcl` / `root.hcl`.
+
+Terraform also picks up `terraform_version_constraint` from `terragrunt.hcl` / `root.hcl`, so in a Terragrunt project one `cd` switches both tools:
+
+```hcl
+# terragrunt.hcl
+terraform_version_constraint  = "~> 1.9"
+terragrunt_version_constraint = ">= 1.0, < 2.0"
+```
+
+Terragrunt binaries live in `~/.tfv/store/terragrunt/` and are activated as `~/.tfv/bin/terragrunt`.
+
+---
+
+## Provider plugin cache
+
+Share downloaded providers across all your projects, so each provider version downloads once instead of once per project:
+
+```sh
+tfv plugin-cache on                  # enable
+tfv plugin-cache status              # show what's set
+tfv plugin-cache off                 # remove what tfv added
+```
+
+This sets `plugin_cache_dir` in your Terraform CLI config (`~/.terraformrc`, or `%APPDATA%\terraform.rc` on Windows), with the cache in `~/.terraform.d/plugin-cache`. OpenTofu reads the same file unless you have a `~/.tofurc`, which tfv then updates too. tfv never changes a `plugin_cache_dir` you set yourself.
+
+---
+
+## Mirrors, proxies & offline use
+
+Download from an internal mirror (Artifactory, Nexus, ...) instead of the public sites. Each variable replaces one host and keeps the rest of the path:
+
+| Variable | Replaces | Used for |
+|---|---|---|
+| `TFV_HASHICORP_MIRROR` | `https://releases.hashicorp.com` | Terraform (downloads and version list) |
+| `TFV_GITHUB_MIRROR` | `https://github.com` | OpenTofu and Terragrunt downloads |
+
+```sh
+export TFV_HASHICORP_MIRROR=https://artifactory.example.com/artifactory/hashicorp
+export TFV_GITHUB_MIRROR=https://user:token@nexus.example.com/repository/github
+```
+
+Plain `http://` mirrors and credentials in the URL are supported. Checksums are still verified against the mirrored `SHA256SUMS` file.
+
+OpenTofu and Terragrunt version lists come from the GitHub API. If it can't be reached, installing an exact version (`tfv install 1.8.0 -p tofu`) still works; `latest` needs the list. Set `GITHUB_TOKEN` to raise GitHub's limit of 60 requests an hour.
 
 ---
 

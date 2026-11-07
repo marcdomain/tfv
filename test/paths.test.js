@@ -67,3 +67,33 @@ describe('getProviderStore', () => {
     expect(getProviderStore('opentofu')).toBe(join(TFV_HOME, 'store', 'opentofu'));
   });
 });
+
+describe('terragrunt provider', () => {
+  const { providerFlag, PROVIDER_NAMES, emptyActive } = require('../lib/utils/paths');
+
+  test('aliases', () => {
+    expect(normalizeProvider('terragrunt')).toBe('terragrunt');
+    expect(normalizeProvider('tg')).toBe('terragrunt');
+  });
+
+  test('cli names', () => {
+    expect(getCliName('tg')).toBe('terragrunt');
+    expect(getCliName('tofu')).toBe('tofu');
+    expect(getCliName('terraform')).toBe('terraform');
+  });
+
+  test('store path', () => {
+    expect(getProviderStore('tg')).toBe(join(TFV_HOME, 'store', 'terragrunt'));
+  });
+
+  test('provider flag for hints', () => {
+    expect(providerFlag('terraform')).toBe('');
+    expect(providerFlag('opentofu')).toBe(' --provider tofu');
+    expect(providerFlag('tg')).toBe(' --provider terragrunt');
+  });
+
+  test('active.json covers every provider', () => {
+    expect(PROVIDER_NAMES).toEqual(['terraform', 'opentofu', 'terragrunt']);
+    expect(emptyActive()).toEqual({ terraform: null, opentofu: null, terragrunt: null });
+  });
+});

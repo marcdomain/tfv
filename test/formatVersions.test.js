@@ -124,3 +124,17 @@ describe('semverDesc', () => {
     expect(['1.7.1', '1.7.3', '1.7.2'].sort(semverDesc)).toEqual(['1.7.3', '1.7.2', '1.7.1']);
   });
 });
+
+describe('formatTagVersions', () => {
+  const { formatTagVersions } = require('../lib/utils/formatVersions');
+
+  test('keeps stable tags, sorted newest first', () => {
+    const refs = ['v0.9.1', 'v1.2.1', 'v1.2.0-rc3', 'v0.67.10', 'v0.67.9', 'vnext']
+      .map(t => ({ ref: `refs/tags/${t}` }));
+    expect(formatTagVersions(refs)).toEqual(['1.2.1', '0.67.10', '0.67.9', '0.9.1']);
+  });
+
+  test('accepts a JSON string', () => {
+    expect(formatTagVersions(JSON.stringify([{ ref: 'refs/tags/v1.0.0' }]))).toEqual(['1.0.0']);
+  });
+});
