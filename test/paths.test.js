@@ -5,6 +5,7 @@ const {
   getPaths,
   normalizeProvider,
   getCliName,
+  getVersionArgs,
   getProviderStore,
 } = require('../lib/utils/paths');
 
@@ -96,4 +97,11 @@ describe('terragrunt provider', () => {
     expect(PROVIDER_NAMES).toEqual(['terraform', 'opentofu', 'terragrunt']);
     expect(emptyActive()).toEqual({ terraform: null, opentofu: null, terragrunt: null });
   });
+});
+
+describe('getVersionArgs', () => {
+  test('terraform uses version', () => expect(getVersionArgs('terraform')).toEqual(['version']));
+  test('tofu uses version', () => expect(getVersionArgs('tofu')).toEqual(['version']));
+  test('terragrunt uses --version', () => expect(getVersionArgs('terragrunt')).toEqual(['--version']));
+  test('tg uses --version', () => expect(getVersionArgs('tg')).toEqual(['--version']));
 });
