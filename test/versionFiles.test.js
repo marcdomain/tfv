@@ -71,3 +71,41 @@ describe('opentofu', () => {
     expect(findVersionFile(dir, 'opentofu', { strict: true })).toBeNull();
   });
 });
+
+describe('terragrunt', () => {
+  const { findHclConstraint } = require('../lib/utils/versionFiles');
+
+  test('.terragrunt-version wins over .tgswitchrc and .tool-versions', () => {
+    write('.tool-versions', 'terragrunt 0.60.0\n');
+    write('.tgswitchrc', '0.55.0');
+    write('.terragrunt-version', '0.67.4\n');
+    expect(findVersionFile(dir, 'terragrunt')).toEqual({ file: '.terragrunt-version', version: '0.67.4' });
+  });
+
+  test('.tool-versions terragrunt line', () => {
+    write('.tool-versions', 'terraform 1.9.0\nterragrunt 1.2.1\n');
+    expect(findVersionFile(dir, 'terragrunt')).toEqual({ file: '.tool-versions', version: '1.2.1' });
+  });
+
+  test('ignores terraform pin files', () => {
+    write('.terraform-version', '1.9.0');
+    expect(findVersionFile(dir, 'terragrunt')).toBeNull();
+  });
+
+  test('reads constraints from terragrunt.hcl, then root.hcl', () => {
+    write('root.hcl', 'terraform_version_constraint = ">= 1.0"\n');
+    write('terragrunt.hcl', [
+      'include "root" { path = find_in_parent_folders("root.hcl") }',
+      '  terragrunt_version_constraint = ">= 0.50, < 2.0"',
+    ].join('\n'));
+    expect(findHclConstraint(dir, 'terragrunt_version_constraint'))
+      .toEqual({ file: 'terragrunt.hcl', version: '>= 0.50, < 2.0' });
+    expect(findHclConstraint(dir, 'terraform_version_constraint'))
+      .toEqual({ file: 'root.hcl', version: '>= 1.0' });
+  });
+
+  test('null without a constraint', () => {
+    write('terragrunt.hcl', 'inputs = {}\n');
+    expect(findHclConstraint(dir, 'terragrunt_version_constraint')).toBeNull();
+  });
+});

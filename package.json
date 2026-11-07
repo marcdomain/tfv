@@ -5,7 +5,7 @@
     "access": "public",
     "provenance": true
   },
-  "description": "Terraform & OpenTofu version manager",
+  "description": "Terraform, OpenTofu & Terragrunt version manager",
   "main": "index.js",
   "scripts": {
     "postinstall": "node lib/utils/postInstall.js",
@@ -21,6 +21,7 @@
   "keywords": [
     "Terraform",
     "OpenTofu",
+    "Terragrunt",
     "version",
     "manager"
   ],
