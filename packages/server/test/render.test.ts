@@ -92,3 +92,24 @@ test('output helpers', () => {
   assert.equal(cleanOutput('a: Refreshing state... [id=1]\nreal line\n\n\n\nend'), 'real line\n\nend');
   assert.match(tail('line1\nline2\nline3', 8), /omitted\)\nline3$/);
 });
+
+test('each project body is indented under its project (blockquote), output nested inside', () => {
+  const body = renderComment({ marker: 'M', headSha: 'abc1234', command: 'tfv', limit: 65000, projects: [{ name: 'infra/dev', plan: run({ project: 'infra/dev' }) }] });
+  const section = body.slice(body.indexOf('<details><summary><b>infra/dev</b>'));
+  assert.match(section, /^<details><summary><b>infra\/dev<\/b> — [^<]+<\/summary>\n<blockquote>\n\n/);
+  const open = section.indexOf('<blockquote>');
+  const output = section.indexOf('<details><summary>Output</summary>');
+  const close = section.indexOf('</blockquote>');
+  assert.ok(open < output && output < close, 'Output sits inside the indented block');
+  assert.match(section, /<\/details>\n\n<\/blockquote>\n<\/details>/);
+});
+
+test('"apply all ready projects" only shows where the server allows it', () => {
+  const ready = (name: string) => ({ name, plan: run({ project: name, destroys: 0 }), blockers: [] });
+  const input = { marker: 'M', headSha: 'abc1234', command: 'tfv', limit: 65000, projects: [ready('a'), ready('b')] };
+  assert.match(renderComment(input), /- or comment `tfv apply` to apply both ready projects/);
+  assert.match(renderComment({ ...input, projects: [ready('a'), ready('b'), ready('c')] }), /to apply all 3 ready projects/);
+  const strict = renderComment({ ...input, oneProjectPerApply: true });
+  assert.doesNotMatch(strict, /comment `tfv apply` to apply/);
+  assert.match(strict, /Apply one project at a time: `tfv apply -p <project>`/);
+});

@@ -6,6 +6,7 @@ import YAML from 'yaml';
 import { parseCron, validTimeZone } from './cron.ts';
 import { randomBytes } from 'node:crypto';
 import type { AuthConfig, DashboardUser } from './auth.ts';
+import { REACTIONS, type Ack } from './vcs/types.ts';
 
 export type Requirement = 'approved' | 'mergeable' | 'undiverged';
 export const REQUIREMENTS: Requirement[] = ['approved', 'mergeable', 'undiverged'];
@@ -39,6 +40,9 @@ export interface RepoPolicy {
   allow_repo_schedules?: boolean;             // drift schedules from tfv.yaml (default true)
   require_apply_project?: boolean;            // refuse a bare `tfv apply`; one project at a time
   allow_targets?: boolean;                    // `tfv plan -t <address>` (default true)
+  ack_reaction?: Ack;                         // reaction on a command tfv picked up (default: server setting)
+  progress_reply?: boolean;                   // spinning "Running…" reply under the command (default: server setting)
+  comment_mode?: 'new' | 'update';            // new comment per plan, or one comment edited in place
   projects?: ProjectRule[];
   drift?: DriftSchedule[];                    // server-side schedules (id must be one repo)
 }
@@ -100,6 +104,10 @@ export interface ServerConfig {
   commandNames: string[];                     // comment prefixes, e.g. ["tfv", "atlantis"]
   defaultVersion: string;                     // when a project pins nothing
   requireApplyProject: boolean;               // TFV_REQUIRE_APPLY_PROJECT: no bare `tfv apply` anywhere
+  ackReaction: Ack;                           // TFV_ACK_REACTION: reaction on the command (default eyes), or none
+  progressReply: boolean;                     // TFV_PROGRESS_REPLY: spinning "Running…" reply (default on)
+  commentMode: 'new' | 'update';              // TFV_COMMENT_MODE: a new comment per plan (default) or one updated comment
+  spinnerUrl: string | null;                  // animated icon GitHub can load; null → fall back to 👀
   github?: GitHubConfig;
   repos: RepoPolicy[];
   channels: Record<string, ChannelConfig>;
@@ -117,6 +125,31 @@ const asList = <T>(value: unknown, field: string): T[] => {
   if (value === undefined) return [];
   if (!Array.isArray(value)) throw new Error(`${field} must be a list`);
   return value as T[];
+};
+
+export const parseReaction = (value: unknown, where: string): Ack | undefined => {
+  if (value === undefined || value === '') return undefined;
+  const v = String(value).trim().toLowerCase();
+  if (v === 'none' || (REACTIONS as readonly string[]).includes(v)) return v as Ack;
+  throw new Error(`${where} must be one of ${REACTIONS.join(', ')}, or none (got "${value}")`);
+};
+
+// GitHub fetches images in comments itself, so the spinner needs a public https address.
+export const spinnerUrlFor = (publicUrl: string): string | null => {
+  try {
+    const u = new URL(publicUrl);
+    const local = /^(localhost|127\.|10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.|\[?::1\]?$)/.test(u.hostname) || u.hostname.endsWith('.local');
+    return u.protocol === 'https:' && !local ? `${publicUrl.replace(/\/+$/, '')}/assets/spinner.gif` : null;
+  } catch {
+    return null;
+  }
+};
+
+export const parseCommentMode = (value: unknown, where: string): 'new' | 'update' | undefined => {
+  if (value === undefined || value === '') return undefined;
+  const v = String(value).trim().toLowerCase();
+  if (v === 'new' || v === 'update') return v;
+  throw new Error(`${where} must be "new" (a comment per plan) or "update" (one comment edited in place), got "${value}"`);
 };
 
 export const validateDrift = (list: unknown, where: string, channels?: Record<string, ChannelConfig>): DriftSchedule[] => {
@@ -206,6 +239,8 @@ export const parseReposYaml = (text: string): RepoPolicy[] => {
   const repos = asList<RepoPolicy>(doc.repos, 'repos');
   for (const [i, repo] of repos.entries()) {
     if (!repo || typeof repo.id !== 'string') throw new Error(`repos[${i}].id is required`);
+    if (repo.ack_reaction !== undefined) repo.ack_reaction = parseReaction(repo.ack_reaction, `repos[${i}].ack_reaction`);
+    if (repo.comment_mode !== undefined) repo.comment_mode = parseCommentMode(repo.comment_mode, `repos[${i}].comment_mode`);
     for (const r of repo.apply_requirements ?? []) {
       if (!REQUIREMENTS.includes(r)) throw new Error(`repos[${i}]: unknown apply requirement "${r}"`);
     }
@@ -230,7 +265,21 @@ export const loadConfig = (env: NodeJS.ProcessEnv = process.env): ServerConfig =
 
   let policy: ServerPolicy = { repos: [], channels: {}, people: [], users: [] };
   const reposFile = env.TFV_REPOS_CONFIG || join(dataDir, 'repos.yaml');
-  if (existsSync(reposFile)) policy = parseServerPolicy(readFileSync(reposFile, 'utf-8'));
+  // An explicitly configured file must be readable; only the default may be absent.
+  if (env.TFV_REPOS_CONFIG || existsSync(reposFile)) {
+    let text: string;
+    try {
+      text = readFileSync(reposFile, 'utf-8');
+    } catch (err) {
+      const code = (err as NodeJS.ErrnoException).code;
+      throw new Error(`cannot read TFV_REPOS_CONFIG (${reposFile}): ${code === 'EACCES' ? 'permission denied' : code === 'ENOENT' ? 'file not found' : (err as Error).message}`);
+    }
+    try {
+      policy = parseServerPolicy(text);
+    } catch (err) {
+      throw new Error(`${reposFile}: ${(err as Error).message}`);
+    }
+  }
   const repos = policy.repos;
   if (env.TFV_REPO_ALLOWLIST) {
     repos.push(...env.TFV_REPO_ALLOWLIST.split(',').map(s => s.trim()).filter(Boolean).map(id => ({ id })));
@@ -267,6 +316,10 @@ export const loadConfig = (env: NodeJS.ProcessEnv = process.env): ServerConfig =
     commandNames,
     defaultVersion: env.TFV_DEFAULT_VERSION || 'latest',
     requireApplyProject: env.TFV_REQUIRE_APPLY_PROJECT === 'true',
+    ackReaction: parseReaction(env.TFV_ACK_REACTION, 'TFV_ACK_REACTION') ?? 'eyes',
+    progressReply: env.TFV_PROGRESS_REPLY !== 'false',
+    commentMode: parseCommentMode(env.TFV_COMMENT_MODE, 'TFV_COMMENT_MODE') ?? 'new',
+    spinnerUrl: spinnerUrlFor(publicUrl),
     github,
     repos,
     channels: policy.channels,

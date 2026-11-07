@@ -128,7 +128,7 @@ describe('dashboard HTTP auth', () => {
     const raw = res.headers.getSetCookie()[0];
     assert.match(raw, /^tfv_session=.+; Path=\/; HttpOnly; SameSite=Lax; Max-Age=3600$/);
     const me = await (await fetch(`${base}/api/me`, { headers: { Cookie: cookieOf(res) } })).json();
-    assert.deepEqual(me, { name: 'Ada Admin', role: 'admin', via: 'password' });
+    assert.deepEqual(me, { name: 'Ada Admin', role: 'admin', via: 'password', platforms: [] });
   });
 
   test('viewers read; only admins act; cookie writes need the CSRF header', async () => {
@@ -170,7 +170,7 @@ describe('dashboard HTTP auth', () => {
     assert.equal(res.headers.get('location'), '/#overview');
     const session = res.headers.getSetCookie().find(c => c.startsWith('tfv_session='))!.split(';')[0];
     const me = await (await fetch(`${base}/api/me`, { headers: { Cookie: session } })).json();
-    assert.deepEqual(me, { name: 'Alice Okafor', role: 'admin', via: 'oidc' });
+    assert.deepEqual(me, { name: 'Alice Okafor', role: 'admin', via: 'oidc', platforms: [] });
   });
 
   test('Okta sign-in: allowed group becomes viewer; others are refused', async () => {

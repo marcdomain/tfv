@@ -143,3 +143,22 @@ describe('repos.yaml validation', () => {
     assert.throws(() => parseReposYaml('repos:\n  - id: x\n    projects:\n      - match: "*"\n        approvals:\n          - from: write\n'), /count/);
   });
 });
+
+describe('loadConfig', () => {
+  test('a configured repos.yaml that cannot be read is an error, not silently ignored', async () => {
+    const { loadConfig } = await import('../src/config.ts');
+    const env = { TFV_DATA_DIR: '/nonexistent-tfv', TFV_REPOS_CONFIG: '/nonexistent-tfv/repos.yaml', TFV_GITHUB_APP_ID: '1', TFV_GITHUB_PRIVATE_KEY: 'k', TFV_GITHUB_WEBHOOK_SECRET: 'w' };
+    assert.throws(() => loadConfig(env), /cannot read TFV_REPOS_CONFIG \(\/nonexistent-tfv\/repos.yaml\): file not found/);
+  });
+});
+
+describe('spinner availability', () => {
+  test('only a public https address can serve the spinner to GitHub', async () => {
+    const { spinnerUrlFor } = await import('../src/config.ts');
+    assert.equal(spinnerUrlFor('https://tfv.acme.dev'), 'https://tfv.acme.dev/assets/spinner.gif');
+    assert.equal(spinnerUrlFor('https://tfv.acme.dev/'), 'https://tfv.acme.dev/assets/spinner.gif');
+    for (const u of ['http://tfv.acme.dev', 'https://localhost:8080', 'https://127.0.0.1', 'https://10.0.0.5', 'https://192.168.1.2', 'https://tfv.local', 'not a url']) {
+      assert.equal(spinnerUrlFor(u), null, u);
+    }
+  });
+});

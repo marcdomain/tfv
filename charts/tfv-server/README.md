@@ -80,6 +80,9 @@ HttpOnly cookies. The chart generates the signing key once and keeps it across u
 | `github.apiUrl` | | GitHub Enterprise Server API URL |
 | `config.repoAllowlist` | `[]` | Repos tfv may act on, e.g. `github.com/acme/*` |
 | `config.requireApplyProject` | `false` | Refuse a bare `tfv apply`; one project at a time |
+| `config.ackReaction` | `eyes` | Reaction on a command tfv picked up: `eyes`, `rocket`, `+1`, `heart`, `hooray`, `laugh`, `confused`, `-1` or `none` |
+| `config.progressReply` | `true` | A spinning "Running…" reply under the command that turns into the result. Needs a public https URL; skipped otherwise |
+| `config.commentMode` | `new` | `new`: a new comment for each plan and apply. `update`: one comment at the top, edited in place |
 | `config.parallelism` | `4` | Plans running at once |
 | `config.preinstall` | `[]` | e.g. `[terraform@1.9.8, tofu@1.8.5]` |
 | `repos` | `{}` | Full `repos.yaml`: rules, approvers, channels, people, drift schedules |

@@ -28,8 +28,8 @@ const ensureOrigin = async (dir: string, url: string) => {
 };
 
 /**
- * Makes `dir` a clean checkout of `sha`. Keeps .terraform and
- * .terragrunt-cache between runs so re-plans skip provider downloads.
+ * Makes `dir` a clean checkout of `sha`. Keeps .terraform, .terragrunt-cache
+ * and local state between runs of the same PR.
  */
 export const checkout = async (dir: string, auth: CloneAuth, sha: string, prRef?: string): Promise<void> => {
   mkdirSync(dir, { recursive: true });
@@ -43,7 +43,9 @@ export const checkout = async (dir: string, auth: CloneAuth, sha: string, prRef?
     await git(dir, ['fetch', '-q', '--depth=1', '--no-tags', 'origin', prRef], auth);
   }
   await git(dir, ['checkout', '-q', '--force', '--detach', sha]);
-  await git(dir, ['clean', '-q', '-ffdx', '-e', '.terraform', '-e', '.terragrunt-cache']);
+  // Keep provider caches, and local state files so a project without a remote
+  // backend still knows what it applied earlier in this PR.
+  await git(dir, ['clean', '-q', '-ffdx', '-e', '.terraform', '-e', '.terragrunt-cache', '-e', 'terraform.tfstate', '-e', 'terraform.tfstate.backup', '-e', 'terraform.tfstate.d']);
 };
 
 /**

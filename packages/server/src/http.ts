@@ -30,6 +30,10 @@ for (const [path, file, type] of [
 ] as const) {
   try { WEB[path] = { type, body: readFileSync(join(WEB_DIR, file), 'utf-8') }; } catch { /* dashboard not shipped */ }
 }
+// The spinner GitHub shows in tfv's "Running…" replies (fetched by GitHub, so no auth).
+let SPINNER: Buffer | null = null;
+try { SPINNER = readFileSync(join(WEB_DIR, 'spinner.gif')); } catch { /* not shipped */ }
+
 const WEB_HEADERS = {
   // Everything comes from this server; nothing inline, nothing third-party.
   'Content-Security-Policy': "default-src 'self'; img-src 'self' data:; frame-ancestors 'none'; base-uri 'none'; form-action 'none'",
@@ -104,6 +108,10 @@ export const createHttpServer = (deps: HttpDeps): Server => {
     if (req.method === 'GET' && url.pathname === '/healthz') return send(res, 200, { ok: true });
     if (req.method === 'GET' && url.pathname === '/readyz') {
       return deps.ready() ? send(res, 200, { ok: true }) : send(res, 503, { ok: false });
+    }
+    if (req.method === 'GET' && url.pathname === '/assets/spinner.gif' && SPINNER) {
+      res.writeHead(200, { 'Content-Type': 'image/gif', 'Cache-Control': 'public, max-age=86400', 'X-Content-Type-Options': 'nosniff' });
+      return res.end(SPINNER);
     }
     if (req.method === 'GET' && url.pathname === '/metrics') {
       return send(res, 200, metrics.render({ tfv_locks: deps.store.allLocks().length }), 'text/plain; version=0.0.4');
@@ -197,7 +205,11 @@ export const createHttpServer = (deps: HttpDeps): Server => {
       if (isWrite && who.cookie && req.headers['x-requested-with'] !== 'tfv') return send(res, 403, { error: 'missing X-Requested-With header' });
       const need = (role: Role) => ROLE_RANK[who.role] >= ROLE_RANK[role];
 
-      if (req.method === 'GET' && url.pathname === '/api/me') return send(res, 200, { name: who.name, role: who.role, via: who.via });
+      if (req.method === 'GET' && url.pathname === '/api/me') {
+        const names: Record<string, string> = { github: 'GitHub', gitlab: 'GitLab', bitbucket: 'Bitbucket', azure: 'Azure DevOps' };
+        const platforms = [...new Set(Object.values(deps.platforms ?? {}))].map(p => ({ id: p, name: names[p] ?? p }));
+        return send(res, 200, { name: who.name, role: who.role, via: who.via, platforms });
+      }
 
       if (req.method === 'POST' && url.pathname === '/api/locks/unlock') {
         if (!need('admin')) return send(res, 403, { error: 'Only admins can release locks.' });
@@ -229,6 +241,43 @@ export const createHttpServer = (deps: HttpDeps): Server => {
           return r ? send(res, 200, show.run(r)) : send(res, 404, { error: 'not found' });
         }
         if (url.pathname === '/api/audit') return send(res, 200, deps.store.auditLog(200).map(show.audit));
+        const qp = url.searchParams;
+        const str = (k: string) => (qp.get(k) ?? '').trim() || undefined;
+        const num = (k: string) => (qp.get(k) ? Number(qp.get(k)) : undefined);
+        const oneOf = <T extends string>(k: string, allowed: readonly T[]) => {
+          const v = str(k);
+          return v && (allowed as readonly string[]).includes(v) ? (v as T) : undefined;
+        };
+        const time = (k: string) => {
+          const v = str(k);
+          return v && !Number.isNaN(Date.parse(v)) ? new Date(v).toISOString() : undefined;
+        };
+        if (url.pathname === '/api/runs/search') {
+          const r = deps.store.searchRuns({
+            q: str('q'), user: str('user'), project: str('project'), repo: str('repo'),
+            status: oneOf('status', ['failed', 'applied', 'destroys', 'changes', 'nochanges', 'running'] as const),
+            kind: oneOf('kind', ['plan', 'apply'] as const),
+            from: time('from'), to: time('to'),
+            sort: oneOf('sort', ['newest', 'oldest', 'project', 'user', 'changes'] as const),
+            limit: num('limit'), offset: num('offset'),
+          });
+          return send(res, 200, { total: r.total, items: r.items.map(show.run) });
+        }
+        if (url.pathname === '/api/audit/search') {
+          const allowed = str('result');
+          const r = deps.store.searchAudit({
+            q: str('q'), user: str('user'), project: str('project'), action: str('action'),
+            allowed: allowed === 'allowed' ? true : allowed === 'denied' ? false : undefined,
+            from: time('from'), to: time('to'), limit: num('limit'), offset: num('offset'),
+          });
+          return send(res, 200, { total: r.total, items: r.items.map(show.audit) });
+        }
+        if (url.pathname === '/api/facets') return send(res, 200, deps.store.facets());
+        if (url.pathname === '/api/projects') {
+          return send(res, 200, deps.store.projectSummaries().map(p => ({
+            ...p, lastRun: show.run(p.lastRun), lastApply: p.lastApply ? show.run(p.lastApply) : null, lock: p.lock ? show.lock(p.lock) : null,
+          })));
+        }
         if (url.pathname === '/api/ping') return send(res, 200, { ok: true });
         if (url.pathname === '/api/drift') return send(res, 200, deps.store.recentDrift(200).map(show.drift));
         if (url.pathname === '/api/drift/schedules') {

@@ -6,7 +6,7 @@ the [Helm chart](../../charts/tfv-server/README.md).
 On every push it does three things:
 1. Finds the affected projects with no config needed.
 2. Plans each one with the exact tool version it pins.
-3. Keeps one PR comment up to date, plus a check run per project with an **Apply** button.
+3. Posts the plan as a new comment, showing the exact command to apply each project, plus a check run per project with an **Apply** button.
 
 Every action goes through per-project permissions and required approvers taken from your Git
 platform's users and teams. Scheduled drift checks post to Slack, Teams, Discord, Google Chat or
@@ -51,6 +51,9 @@ commands also work.
 | `TFV_REQUIRE_APPLY_PROJECT` | `false` | `true` turns off a bare `tfv apply`; people must apply one project at a time with `-p` |
 | `TFV_REPO_ALLOWLIST` | | Allowed repos, e.g. `github.com/acme/*` (or list them in `repos.yaml`) |
 | `TFV_REPOS_CONFIG` | `/data/repos.yaml` | Rules, approvers, channels, drift schedules |
+| `TFV_ACK_REACTION` | `eyes` | Reaction on a command tfv picked up: `eyes`, `rocket`, `+1`, `heart`, `hooray`, `laugh`, `confused`, `-1` or `none`. Per repo: `ack_reaction` |
+| `TFV_PROGRESS_REPLY` | `true` | A spinning "Running…" reply under the command that turns into the result. Needs a public https `TFV_PUBLIC_URL`; skipped otherwise. Per repo: `progress_reply` |
+| `TFV_COMMENT_MODE` | `new` | `new`: each plan and apply gets its own comment under the command. `update`: one comment at the top, edited in place. Per repo: `comment_mode` |
 | `TFV_PARALLELISM` | `4` | Plans running at once |
 | `TFV_DEFAULT_VERSION` | `latest` | Tool version when a project pins none |
 | `TFV_PREINSTALL` | | Warm the cache, e.g. `terraform@1.9.8,tofu@1.8.5` |

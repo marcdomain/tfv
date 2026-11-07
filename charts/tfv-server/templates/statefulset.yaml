@@ -73,6 +73,12 @@ spec:
             {{- end }}
             - name: TFV_REQUIRE_APPLY_PROJECT
               value: {{ .Values.config.requireApplyProject | quote }}
+            - name: TFV_ACK_REACTION
+              value: {{ .Values.config.ackReaction | default "eyes" | quote }}
+            - name: TFV_PROGRESS_REPLY
+              value: {{ .Values.config.progressReply | quote }}
+            - name: TFV_COMMENT_MODE
+              value: {{ .Values.config.commentMode | default "new" | quote }}
             - name: TFV_PARALLELISM
               value: {{ .Values.config.parallelism | quote }}
             - name: TFV_RUN_TIMEOUT_SECONDS
