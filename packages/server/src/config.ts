@@ -4,6 +4,8 @@ import { readFileSync, existsSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import YAML from 'yaml';
 import { parseCron, validTimeZone } from './cron.ts';
+import { randomBytes } from 'node:crypto';
+import type { AuthConfig, DashboardUser } from './auth.ts';
 
 export type Requirement = 'approved' | 'mergeable' | 'undiverged';
 export const REQUIREMENTS: Requirement[] = ['approved', 'mergeable', 'undiverged'];
@@ -78,6 +80,7 @@ export interface ServerPolicy {
   repos: RepoPolicy[];
   channels: Record<string, ChannelConfig>;
   people: Person[];
+  users: DashboardUser[];                     // dashboard username/password sign-in
 }
 
 export interface GitHubConfig {
@@ -101,6 +104,7 @@ export interface ServerConfig {
   repos: RepoPolicy[];
   channels: Record<string, ChannelConfig>;
   people: Person[];
+  auth: AuthConfig;
 }
 
 const readSecret = (env: NodeJS.ProcessEnv, name: string): string | undefined => {
@@ -143,13 +147,58 @@ export const parseServerPolicy = (text: string): ServerPolicy => {
     if (c.type !== 'slack' && !c.webhook_url_env) throw new Error(`channels.${name}.webhook_url_env is required`);
   }
   const people = asList<Person>(doc.people, 'people');
+  const users = parseUsers(doc.dashboard?.users, 'dashboard.users');
   const repos = parseReposYaml(text);
   for (const [i, r] of repos.entries()) {
     if (!r.drift) continue;
     if (/[*?]/.test(r.id)) throw new Error(`repos[${i}]: drift schedules need an exact repo id, not a glob ("${r.id}")`);
     validateDrift(r.drift, `repos[${i}].drift`, channels);
   }
-  return { repos, channels, people };
+  return { repos, channels, people, users };
+};
+
+export const parseUsers = (list: unknown, where: string): DashboardUser[] => {
+  const users = asList<DashboardUser>(list, where);
+  for (const [i, u] of users.entries()) {
+    if (!u?.username || !u.password_hash?.startsWith('scrypt$')) {
+      throw new Error(`${where}[${i}] needs a username and a password_hash from "node packages/server/src/hash-password.ts"`);
+    }
+    if (u.role && !['admin', 'viewer'].includes(u.role)) throw new Error(`${where}[${i}].role must be admin or viewer`);
+  }
+  return users;
+};
+
+const list = (v: string | undefined) => (v ?? '').split(',').map(s => s.trim()).filter(Boolean);
+
+export const loadAuth = (env: NodeJS.ProcessEnv, publicUrl: string, users: DashboardUser[]): AuthConfig => {
+  const usersFile = env.TFV_DASHBOARD_USERS_FILE;
+  if (usersFile) users = [...users, ...parseUsers(YAML.parse(readFileSync(usersFile, 'utf-8')), usersFile)];
+  let oidc: AuthConfig['oidc'];
+  if (env.TFV_OIDC_ISSUER) {
+    const clientSecret = readSecret(env, 'TFV_OIDC_CLIENT_SECRET');
+    if (!env.TFV_OIDC_CLIENT_ID || !clientSecret) throw new Error('TFV_OIDC_CLIENT_ID and TFV_OIDC_CLIENT_SECRET are required with TFV_OIDC_ISSUER');
+    oidc = {
+      issuer: env.TFV_OIDC_ISSUER.replace(/\/+$/, ''),
+      clientId: env.TFV_OIDC_CLIENT_ID,
+      clientSecret,
+      name: env.TFV_OIDC_NAME || (/okta(preview)?\.com/.test(env.TFV_OIDC_ISSUER) ? 'Okta' : 'single sign-on'),
+      scopes: list(env.TFV_OIDC_SCOPES || 'openid,profile,email,groups'),
+      groupsClaim: env.TFV_OIDC_GROUPS_CLAIM || 'groups',
+      adminGroups: list(env.TFV_OIDC_ADMIN_GROUPS),
+      allowedGroups: list(env.TFV_OIDC_ALLOWED_GROUPS),
+    };
+  }
+  const sessionSecret = readSecret(env, 'TFV_SESSION_SECRET');
+  if (sessionSecret && sessionSecret.length < 32) throw new Error('TFV_SESSION_SECRET must be at least 32 characters');
+  return {
+    apiToken: readSecret(env, 'TFV_API_TOKEN'),
+    // Without a fixed secret, sessions end when the server restarts.
+    sessionSecret: sessionSecret || randomBytes(32).toString('hex'),
+    sessionHours: Math.max(1, Number(env.TFV_SESSION_HOURS || 12)),
+    secureCookies: publicUrl.startsWith('https://'),
+    users,
+    oidc,
+  };
 };
 
 export const parseReposYaml = (text: string): RepoPolicy[] => {
@@ -179,7 +228,7 @@ export const loadConfig = (env: NodeJS.ProcessEnv = process.env): ServerConfig =
   const dataDir = resolve(env.TFV_DATA_DIR || '/data');
   const port = Number(env.TFV_PORT || 8080);
 
-  let policy: ServerPolicy = { repos: [], channels: {}, people: [] };
+  let policy: ServerPolicy = { repos: [], channels: {}, people: [], users: [] };
   const reposFile = env.TFV_REPOS_CONFIG || join(dataDir, 'repos.yaml');
   if (existsSync(reposFile)) policy = parseServerPolicy(readFileSync(reposFile, 'utf-8'));
   const repos = policy.repos;
@@ -208,10 +257,11 @@ export const loadConfig = (env: NodeJS.ProcessEnv = process.env): ServerConfig =
   const commandNames = ['tfv'];
   if (env.TFV_ATLANTIS_COMPAT !== 'false') commandNames.push('atlantis');
 
+  const publicUrl = (env.TFV_PUBLIC_URL || `http://localhost:${port}`).replace(/\/+$/, '');
   return {
     port,
     dataDir,
-    publicUrl: (env.TFV_PUBLIC_URL || `http://localhost:${port}`).replace(/\/+$/, ''),
+    publicUrl,
     parallelism: Math.max(1, Number(env.TFV_PARALLELISM || 4)),
     runTimeoutMs: Math.max(60, Number(env.TFV_RUN_TIMEOUT_SECONDS || 3600)) * 1000,
     commandNames,
@@ -221,5 +271,6 @@ export const loadConfig = (env: NodeJS.ProcessEnv = process.env): ServerConfig =
     repos,
     channels: policy.channels,
     people: policy.people,
+    auth: loadAuth(env, publicUrl, policy.users),
   };
 };

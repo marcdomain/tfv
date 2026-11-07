@@ -28,6 +28,7 @@ const { createHttpServer } = await import('./http.ts');
 const { tfvResolver } = await import('./runner.ts');
 const { tfv } = await import('./tfv.ts');
 const { DriftScheduler } = await import('./drift.ts');
+const { Oidc } = await import('./auth.ts');
 
 const store = new Store(join(config.dataDir, 'tfv.db'));
 const app = new App({ config, store, resolver: tfvResolver(config.defaultVersion) });
@@ -45,8 +46,15 @@ for (const c of Object.values(config.channels)) {
 let ready = false;
 let stopping = false;
 const server = createHttpServer({
-  app, store, adapters, drift, apiToken: process.env.TFV_API_TOKEN, ready: () => ready && !stopping,
+  app, store, adapters, drift, auth: config.auth,
+  oidc: config.auth.oidc ? new Oidc(config.auth.oidc, config.publicUrl) : undefined,
+  ready: () => ready && !stopping,
 });
+addSecret(config.auth.apiToken);
+addSecret(config.auth.oidc?.clientSecret);
+if (!process.env.TFV_SESSION_SECRET && !process.env.TFV_SESSION_SECRET_FILE) {
+  log.warn('TFV_SESSION_SECRET is not set; dashboard sessions end when the server restarts');
+}
 
 server.listen(config.port, () => {
   ready = true;

@@ -94,7 +94,7 @@ repos:
 `);
   const config: ServerConfig = {
     port: 0, dataDir: join(tmp, 'data'), publicUrl: 'https://tfv.example.com', parallelism: 2, runTimeoutMs: 60_000,
-    commandNames: ['tfv'], defaultVersion: 'latest', requireApplyProject: false, ...policy,
+    commandNames: ['tfv'], defaultVersion: 'latest', requireApplyProject: false, auth: { sessionSecret: 'x'.repeat(32), sessionHours: 1, secureCookies: false, users: [] }, ...policy,
   };
   store = new Store(':memory:');
   sent = [];

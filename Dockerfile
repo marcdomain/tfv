@@ -18,6 +18,7 @@ COPY package.json ./
 COPY lib ./lib
 COPY packages/server/package.json packages/server/
 COPY packages/server/src packages/server/src
+COPY packages/server/web packages/server/web
 
 ENV NODE_ENV=production \
     TFV_DATA_DIR=/data \

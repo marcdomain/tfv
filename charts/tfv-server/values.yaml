@@ -40,9 +40,29 @@ repos: {}
 #          permissions: { apply: [team:platform-admins] }
 #          approvals: [{ from: team:platform-admins, count: 2 }]
 
-api:
-  # Turns on /api/* with a Bearer token. Secret key: `api-token`.
-  existingSecret: ""
+dashboard:
+  # Sign-in methods; turn on any mix. Viewers read, admins can unlock and run drift checks.
+  oidc:                         # Okta, Azure AD, Google, Keycloak, Auth0...
+    enabled: false
+    name: Okta                  # button label
+    issuer: ""                  # e.g. https://acme.okta.com/oauth2/default
+    clientId: ""
+    existingSecret: ""          # Secret with key `client-secret`
+    clientSecret: ""            # or inline (the chart creates a Secret)
+    scopes: [openid, profile, email, groups]
+    groupsClaim: groups
+    adminGroups: []             # e.g. [tfv-admins]
+    allowedGroups: []           # if set, only these groups (and admins) may sign in
+  # Username/password users. Hash with: node packages/server/src/hash-password.ts
+  users: []
+  #  - { username: ada, password_hash: "scrypt$16384$8$1$...", role: admin, name: Ada Lovelace }
+  usersExistingSecret: ""       # or a Secret with key `users.yaml` holding that list
+  apiToken:
+    existingSecret: ""          # Secret with key `api-token`: automation and /api access
+  sessionHours: 12
+  # Signs session cookies. Left empty, the chart generates one and keeps it across upgrades.
+  sessionSecret:
+    existingSecret: ""          # Secret with key `session-secret` (32+ characters)
 
 # Cloud credentials, chat tokens (TFV_SLACK_TOKEN, TFV_TEAMS_WEBHOOK), etc.
 extraEnv: []
@@ -63,6 +83,22 @@ service:
   type: ClusterIP
   port: 80
 
+# Gateway API (recommended): an HTTPRoute attached to your Gateway.
+httpRoute:
+  enabled: false
+  annotations: {}
+  parentRefs: []
+  #  - name: public-gateway
+  #    namespace: gateway-system
+  #    sectionName: https
+  hostnames: []                 # e.g. [tfv.acme.dev]
+  # Default sends everything to tfv. To expose only webhooks on a public gateway,
+  # use: [{ matches: [{ path: { type: PathPrefix, value: /events/ } }] }]
+  rules:
+    - matches:
+        - path: { type: PathPrefix, value: / }
+
+# Classic Ingress, if you still use one.
 ingress:
   enabled: false
   className: ""

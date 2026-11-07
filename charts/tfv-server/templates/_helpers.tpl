@@ -37,6 +37,8 @@ app.kubernetes.io/managed-by: {{ .Release.Service }}
 {{- define "tfv.publicUrl" -}}
 {{- if .Values.config.publicUrl -}}
 {{- .Values.config.publicUrl -}}
+{{- else if and .Values.httpRoute.enabled .Values.httpRoute.hostnames -}}
+{{- printf "https://%s" (index .Values.httpRoute.hostnames 0) -}}
 {{- else if and .Values.ingress.enabled .Values.ingress.hosts -}}
 {{- printf "%s://%s" (ternary "https" "http" (gt (len .Values.ingress.tls) 0)) (index .Values.ingress.hosts 0).host -}}
 {{- end -}}
@@ -49,7 +51,23 @@ app.kubernetes.io/managed-by: {{ .Release.Service }}
 {{- if and (not .Values.github.existingSecret) (or (not .Values.github.privateKey) (not .Values.github.webhookSecret)) -}}
 {{- fail "set github.existingSecret, or both github.privateKey and github.webhookSecret" -}}
 {{- end -}}
+{{- if and .Values.dashboard.oidc.enabled (or (not .Values.dashboard.oidc.issuer) (not .Values.dashboard.oidc.clientId)) -}}
+{{- fail "dashboard.oidc needs issuer and clientId" -}}
+{{- end -}}
+{{- if and .Values.dashboard.oidc.enabled (not .Values.dashboard.oidc.existingSecret) (not .Values.dashboard.oidc.clientSecret) -}}
+{{- fail "dashboard.oidc needs existingSecret or clientSecret" -}}
+{{- end -}}
+{{- if and .Values.dashboard.oidc.enabled (not (include "tfv.publicUrl" .)) -}}
+{{- fail "dashboard.oidc needs a public URL for its redirect: set config.publicUrl, httpRoute.hostnames or ingress.hosts" -}}
+{{- end -}}
+{{- if and .Values.httpRoute.enabled (not .Values.httpRoute.parentRefs) -}}
+{{- fail "httpRoute.parentRefs must name your Gateway" -}}
+{{- end -}}
 {{- if and (not .Values.config.repoAllowlist) (not .Values.repos.repos) -}}
 {{- fail "allow at least one repo: config.repoAllowlist or repos.repos" -}}
 {{- end -}}
+{{- end -}}
+
+{{- define "tfv.authSecretName" -}}
+{{- printf "%s-auth" (include "tfv.fullname" .) -}}
 {{- end -}}

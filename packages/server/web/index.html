@@ -1,0 +1,57 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>tfv server</title>
+  <script src="/theme.js"></script>
+  <link rel="stylesheet" href="/app.css">
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%233346c4'/%3E%3Ctext x='16' y='21' font-family='monospace' font-size='13' font-weight='700' fill='white' text-anchor='middle'%3Etfv%3C/text%3E%3C/svg%3E">
+</head>
+<body>
+  <header class="top">
+    <div class="brand"><span class="logo">tfv</span><span class="product">server</span></div>
+    <nav id="nav" aria-label="Sections">
+      <a href="#overview" data-view="overview">Overview</a>
+      <a href="#runs" data-view="runs">Runs</a>
+      <a href="#locks" data-view="locks">Locks</a>
+      <a href="#drift" data-view="drift">Drift</a>
+      <a href="#audit" data-view="audit">Audit</a>
+    </nav>
+    <div class="top-right">
+      <span id="refreshed" class="muted small"></span>
+      <button id="theme" class="ghost small icon" type="button" title="Theme"></button>
+      <span id="me" class="me small" hidden></span>
+      <button id="signout" class="ghost small" type="button" hidden>Sign out</button>
+    </div>
+  </header>
+
+  <main id="main">
+    <section id="signin" class="signin" hidden>
+      <h1>Sign in to tfv server</h1>
+      <p id="signin-error" class="error" role="alert" hidden></p>
+      <a id="sso" class="button sso" href="/auth/oidc/login" hidden></a>
+      <div id="or" class="or" hidden><span>or</span></div>
+      <form id="password-form" hidden>
+        <label for="username">Username</label>
+        <input id="username" autocomplete="username" spellcheck="false" required>
+        <label for="password">Password</label>
+        <input id="password" type="password" autocomplete="current-password" required>
+        <button type="submit">Sign in</button>
+      </form>
+      <details id="token-box" hidden>
+        <summary>Use an API token</summary>
+        <form id="token-form">
+          <label for="token">API token (<code>TFV_API_TOKEN</code>)</label>
+          <input id="token" type="password" autocomplete="off" spellcheck="false" required>
+          <button type="submit" class="ghost">Sign in with token</button>
+        </form>
+      </details>
+      <p id="no-auth" class="muted" hidden>No sign-in method is set up. Configure single sign-on (<code>TFV_OIDC_*</code>), dashboard users, or <code>TFV_API_TOKEN</code>.</p>
+    </section>
+    <section id="view"></section>
+  </main>
+
+  <script src="/app.js"></script>
+</body>
+</html>

@@ -21,6 +21,7 @@ spec:
         {{- end }}
       annotations:
         checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
+        checksum/dashboard: {{ toJson .Values.dashboard | sha256sum }}
         {{- if not .Values.github.existingSecret }}
         checksum/secret: {{ include (print $.Template.BasePath "/secret.yaml") . | sha256sum }}
         {{- end }}
@@ -92,12 +93,40 @@ spec:
             - name: TFV_PUBLIC_URL
               value: {{ . | quote }}
             {{- end }}
-            {{- with .Values.api.existingSecret }}
+            {{- with .Values.dashboard.apiToken.existingSecret }}
             - name: TFV_API_TOKEN
               valueFrom:
                 secretKeyRef:
                   name: {{ . }}
                   key: api-token
+            {{- end }}
+            - name: TFV_SESSION_SECRET_FILE
+              value: /secrets/session/session-secret
+            - name: TFV_SESSION_HOURS
+              value: {{ .Values.dashboard.sessionHours | quote }}
+            {{- if or .Values.dashboard.users .Values.dashboard.usersExistingSecret }}
+            - name: TFV_DASHBOARD_USERS_FILE
+              value: /secrets/users/users.yaml
+            {{- end }}
+            {{- with .Values.dashboard.oidc }}
+            {{- if .enabled }}
+            - name: TFV_OIDC_ISSUER
+              value: {{ .issuer | quote }}
+            - name: TFV_OIDC_CLIENT_ID
+              value: {{ .clientId | quote }}
+            - name: TFV_OIDC_CLIENT_SECRET_FILE
+              value: /secrets/oidc/client-secret
+            - name: TFV_OIDC_NAME
+              value: {{ .name | quote }}
+            - name: TFV_OIDC_SCOPES
+              value: {{ join "," .scopes | quote }}
+            - name: TFV_OIDC_GROUPS_CLAIM
+              value: {{ .groupsClaim | quote }}
+            - name: TFV_OIDC_ADMIN_GROUPS
+              value: {{ join "," .adminGroups | quote }}
+            - name: TFV_OIDC_ALLOWED_GROUPS
+              value: {{ join "," .allowedGroups | quote }}
+            {{- end }}
             {{- end }}
             {{- with .Values.extraEnv }}
             {{- toYaml . | nindent 12 }}
@@ -124,6 +153,19 @@ spec:
             - name: github
               mountPath: /secrets/github
               readOnly: true
+            - name: session
+              mountPath: /secrets/session
+              readOnly: true
+            {{- if or .Values.dashboard.users .Values.dashboard.usersExistingSecret }}
+            - name: users
+              mountPath: /secrets/users
+              readOnly: true
+            {{- end }}
+            {{- if .Values.dashboard.oidc.enabled }}
+            - name: oidc
+              mountPath: /secrets/oidc
+              readOnly: true
+            {{- end }}
             {{- if .Values.repos }}
             - name: config
               mountPath: /config
@@ -139,6 +181,25 @@ spec:
           secret:
             secretName: {{ include "tfv.githubSecretName" . }}
             defaultMode: 0440
+        - name: session
+          secret:
+            secretName: {{ default (include "tfv.authSecretName" .) .Values.dashboard.sessionSecret.existingSecret }}
+            items: [{ key: session-secret, path: session-secret }]
+            defaultMode: 0440
+        {{- if or .Values.dashboard.users .Values.dashboard.usersExistingSecret }}
+        - name: users
+          secret:
+            secretName: {{ default (include "tfv.authSecretName" .) .Values.dashboard.usersExistingSecret }}
+            items: [{ key: users.yaml, path: users.yaml }]
+            defaultMode: 0440
+        {{- end }}
+        {{- if .Values.dashboard.oidc.enabled }}
+        - name: oidc
+          secret:
+            secretName: {{ default (include "tfv.authSecretName" .) .Values.dashboard.oidc.existingSecret }}
+            items: [{ key: client-secret, path: client-secret }]
+            defaultMode: 0440
+        {{- end }}
         {{- if .Values.repos }}
         - name: config
           configMap:
