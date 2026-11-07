@@ -6,6 +6,9 @@
  */
 
 const modules = [
+  '../lib/core',
+  '../lib/core/install',
+  '../lib/core/resolve',
   '../lib/modules/install',
   '../lib/modules/use',
   '../lib/modules/list',
