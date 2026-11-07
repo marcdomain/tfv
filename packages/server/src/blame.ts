@@ -16,6 +16,8 @@ export interface Author {
   subject: string;
   via: 'resource' | 'module' | 'project';  // how precise the match is
   file?: string;
+  start?: number;                           // lines of the block in `file` at HEAD
+  end?: number;
 }
 
 // Splits an address into segments, ignoring [index] keys.
@@ -88,7 +90,7 @@ export const lastAuthor = async (root: string, projectDir: string, address: stri
       // -L prints the commit header first, then the diff; only the header is used.
       const out = await git(root, ['log', '-1', `--format=${FORMAT}`, `-L${where.start},${where.end}:${where.file}`, 'HEAD'], auth);
       const hit = parseLog(out);
-      if (hit) return { ...hit, via: where.via, file: where.file };
+      if (hit) return { ...hit, via: where.via, file: where.file, start: where.start, end: where.end };
     } catch {
       // fall through to the project-level answer
     }

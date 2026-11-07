@@ -134,6 +134,16 @@ export interface ProjectView {
   apply?: Run;
   blockers?: string[];        // what stops apply, if anything
   note?: string;              // e.g. "locked by #12"
+  dir?: string;               // project folder, for links
+}
+
+// Links and pictures for people and code (source-control specific).
+export interface CommentLinks {
+  commit(sha: string): string;
+  tree(sha: string, dir: string): string;
+  user(login: string): string | null;
+  avatar?(login: string): string | null;
+  run?(id: number): string;    // the run's page in the tfv dashboard
 }
 
 export interface CommentInput {
@@ -145,7 +155,17 @@ export interface CommentInput {
   limit: number;
   warnings?: string[];
   oneProjectPerApply?: boolean;   // footer advertises `apply -p` only
+  links?: CommentLinks;
+  approvers?: string[];           // current approvals of the head commit
 }
+
+// A person as "avatar + linked name"; never an @mention, so edits don't notify.
+const personMd = (login: string, links?: CommentLinks): string => {
+  const pic = links?.avatar?.(login);
+  const url = links?.user(login);
+  const img = pic ? `<img src="${pic}" width="18" height="18" align="center" alt=""> ` : '';
+  return `${img}${url ? `[${login}](${url})` : login}`;
+};
 
 const parse = (run?: Run): PlanSummary | null => (run?.summary ? JSON.parse(run.summary) as PlanSummary : null);
 
@@ -182,9 +202,24 @@ export const renderComment = (input: CommentInput): string => {
     return s ? s.changes.filter(c => c.action === 'delete' || c.action === 'replace').map(c => ({ project: v.name, c })) : [];
   });
 
+  const links = input.links;
   const head: string[] = [input.marker];
   const icon = failed ? '🔴' : dangerous.length ? '🟠' : '🟢';
-  head.push(`### ${icon} tfv · ${projects.length} project${projects.length === 1 ? '' : 's'} · \`${short}\``);
+  const shaText = links ? `[\`${short}\`](${links.commit(headSha)})` : `\`${short}\``;
+  head.push(`### ${icon} tfv · ${projects.length} project${projects.length === 1 ? '' : 's'} · ${shaText}`);
+
+  // One line of counts, so the state is clear before any detail.
+  const ready = projects.filter(v => applyCell(v) === '🟢 ready');
+  const waiting = projects.filter(v => v.blockers?.length && applyCell(v).startsWith('🔒'));
+  const applied = projects.filter(v => applyCell(v) === '✅ applied');
+  const stats = [
+    dangerous.length && `⚠️ ${dangerous.length} to destroy or replace`,
+    ready.length && `🟢 ${ready.length} ready to apply`,
+    waiting.length && `🔒 ${waiting.length} waiting`,
+    applied.length && `✅ ${applied.length} applied`,
+    failed && `❌ ${failed} failed`,
+  ].filter(Boolean);
+  if (stats.length) head.push(`<sub>${stats.join(' · ')}</sub>`);
   if (dangerous.length) {
     head.push('', '> [!CAUTION]', `> **${dangerous.length} resource${dangerous.length === 1 ? '' : 's'} will be destroyed or replaced**`);
     for (const { project, c } of dangerous.slice(0, 15)) {
@@ -194,10 +229,26 @@ export const renderComment = (input: CommentInput): string => {
   }
   for (const w of input.warnings ?? []) head.push('', `> [!WARNING]\n> ${w}`);
 
-  head.push('', '| Project | Engine | Plan | Apply |', '|---|---|---|---|');
+  head.push('', '| Project | Engine | Plan | Apply | By |', '|---|---|---|---|---|');
   for (const v of projects) {
-    head.push(`| \`${v.name}\` | ${v.plan?.engine || '—'} | ${planCell(v)} | ${applyCell(v)} |`);
+    const name = links && v.plan ? `[\`${v.name}\`](${links.tree(v.plan.headSha, v.dir || v.plan.dir || v.name)})` : `\`${v.name}\``;
+    const latest = v.apply && v.plan && v.apply.headSha === v.plan.headSha && v.apply.id > v.plan.id ? v.apply : v.plan;
+    head.push(`| ${name} | ${v.plan?.engine || '—'} | ${planCell(v)} | ${applyCell(v)} | ${latest ? personMd(latest.user, links) : '—'} |`);
   }
+
+  if (input.approvers?.length) {
+    head.push('', `**Approved by** ${input.approvers.map(a => personMd(a, links)).join(' · ')}`);
+  }
+
+  // What to do next, per project.
+  const steps: string[] = [];
+  for (const v of ready) steps.push(`- 🟢 **\`${v.name}\`** is ready: comment \`${command} apply -p ${v.name}\``);
+  if (ready.length > 1 && !input.oneProjectPerApply) steps.push(`- or \`${command} apply\` to apply all ${ready.length} ready projects`);
+  for (const v of waiting) steps.push(`- 🔒 **\`${v.name}\`** needs ${v.blockers!.join('; ')}`);
+  for (const v of projects.filter(x => x.plan?.status === 'failed')) {
+    steps.push(`- ❌ **\`${v.name}\`** failed: fix it and push, or comment \`${command} plan -p ${v.name}\``);
+  }
+  if (steps.length) head.push('', '**Next steps**', ...steps);
 
   const footer = [
     '',
@@ -213,6 +264,7 @@ export const renderComment = (input: CommentInput): string => {
     const lines: string[] = [];
     const title = v.plan?.status === 'failed' ? 'plan failed' : s ? countsText(s) : (v.note ?? 'not planned');
     lines.push('', `<details${v.plan?.status === 'failed' ? ' open' : ''}><summary><b>${v.name}</b> — ${title}</summary>`, '');
+    if (v.plan && links?.run) lines.push(`[Open in the tfv dashboard](${links.run(v.plan.id)})`, '');
     if (v.plan?.targets?.length) {
       lines.push(`> [!NOTE]\n> **Targeted plan:** only ${v.plan.targets.map(t => `\`${t}\``).join(', ')}. Other changes in this project are not included. Plan without \`-t\` for the full picture.`, '');
     }
@@ -265,7 +317,7 @@ export const renderCheck = (projectName: string, run: Run, blockers: string[] | 
   const s = parse(run);
   const ok = run.status === 'success';
   const title = !ok ? `${run.kind} failed` : run.kind === 'apply' ? 'Applied' : s ? countsText(s) : 'Planned';
-  const summary: string[] = [`**${projectName}** · ${run.engine}${run.targets?.length ? ` · targeted: ${run.targets.map(t => `\`${t}\``).join(', ')}` : ''}`];
+  const summary: string[] = [`**${projectName}** · ${run.engine} · ${run.kind === 'apply' ? 'applied' : 'planned'} by ${run.user}${run.prAuthor && run.prAuthor !== run.user ? ` (PR by ${run.prAuthor})` : ''}${run.targets?.length ? ` · targeted: ${run.targets.map(t => `\`${t}\``).join(', ')}` : ''}`];
   if (s && s.changes.length) summary.push('', changeList(s, 100));
   if (ok && run.kind === 'plan' && s && !s.noChanges) {
     summary.push('', blockers?.length ? `🔒 Apply blocked: ${blockers.join('; ')}` : '🟢 Ready to apply');

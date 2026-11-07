@@ -43,10 +43,6 @@
     const s = Math.round((Date.parse(b) - Date.parse(a)) / 1000);
     return s < 60 ? `${s}s` : `${Math.floor(s / 60)}m ${s % 60}s`;
   };
-  const prUrl = (repo, pr) => {
-    const [host, ...rest] = repo.split('/');
-    return host === 'github.com' ? `https://github.com/${rest.join('/')}/pull/${pr}` : null;
-  };
   const repoName = (repo) => repo.split('/').slice(1).join('/');
   const statusPill = (r) => {
     if (r.status === 'running' || r.status === 'queued') return '<span class="pill run">running</span>';
@@ -76,6 +72,35 @@
     ? `<div class="scroll"><table><thead><tr>${head.map(h => `<th>${h}</th>`).join('')}</tr></thead><tbody>${rows.join('')}</tbody></table></div>`
     : `<div class="empty">${empty}</div>`;
 
+  // ---- people and links ---------------------------------------------------
+  const initials = (name) => String(name || '?').replace(/[^A-Za-z0-9 ._-]/g, '').split(/[\s._-]+/).filter(Boolean).slice(0, 2).map(w => w[0].toUpperCase()).join('') || '?';
+  const hue = (name) => { let h = 0; for (const c of String(name)) h = (h * 31 + c.charCodeAt(0)) >>> 0; return h % 8; };
+  const ext = (url, text, cls = 'ext') => url ? `<a class="${cls}" href="${esc(url)}" target="_blank" rel="noopener noreferrer">${text}</a>` : text;
+  // Avatar: the platform picture (served by tfv), or initials if there is none.
+  const avatar = (name, src, size = '') => src
+    ? `<img class="av ${size}" src="${esc(src)}" alt="" data-initials="${esc(initials(name))}" data-hue="${hue(name)}" loading="lazy">`
+    : `<span class="av ${size} av${hue(name)}" aria-hidden="true">${esc(initials(name))}</span>`;
+  // A person: avatar, name (linked to their profile where the platform has one), optional role.
+  const who = (name, url, role, src, size) => !name ? '<span class="muted">—</span>'
+    : `<span class="who">${avatar(name, src, size)}${url ? `<a class="plain" href="${esc(url)}" target="_blank" rel="noopener noreferrer">${esc(name)}</a>` : esc(name)}${role ? ` <span class="role">${esc(role)}</span>` : ''}</span>`;
+  // Pictures that fail to load (offline, no avatar) turn into initials.
+  document.addEventListener('error', (e) => {
+    const img = e.target;
+    if (!(img instanceof HTMLImageElement) || !img.classList.contains('av')) return;
+    const span = document.createElement('span');
+    span.className = `${img.className} av${img.dataset.hue}`;
+    span.textContent = img.dataset.initials;
+    span.setAttribute('aria-hidden', 'true');
+    img.replaceWith(span);
+  }, true);
+  const prLink = (r) => ext(r.links?.pr, `${esc(repoName(r.repo))} <span class="muted">#${r.pr}</span>`, 'plain');
+  const runPeople = (r, size) => {
+    const L = r.links || {};
+    const did = r.kind === 'apply' ? 'applied' : 'planned';
+    if (!r.prAuthor || r.prAuthor === r.user) return who(r.user, L.user, r.prAuthor ? `author, ${did}` : did, L.userAvatar, size);
+    return `${who(r.prAuthor, L.prAuthor, 'author', L.prAuthorAvatar, size)}${who(r.user, L.user, did, L.userAvatar, size)}`;
+  };
+
   // ---- views --------------------------------------------------------------
   const runRow = (r) => {
     const s = summaryOf(r);
@@ -83,8 +108,8 @@
       <td>${statusPill(r)}</td>
       <td class="mono">${esc(r.project)}${r.workspace !== 'default' ? ` <span class="muted">@${esc(r.workspace)}</span>` : ''}${r.targets?.length ? ' <span class="pill run">targeted</span>' : ''}</td>
       <td>${r.kind === 'plan' ? counts(s) : '<span class="muted">apply</span>'}</td>
-      <td>${esc(repoName(r.repo))} <span class="muted">#${r.pr}</span></td>
-      <td>${esc(r.user)}</td>
+      <td>${prLink(r)}</td>
+      <td>${runPeople(r)}</td>
       <td class="muted">${esc(r.engine || '')}</td>
       <td class="muted" title="${esc(when(r.startedAt))}">${ago(r.startedAt)}</td>
     </tr>`;
@@ -116,12 +141,16 @@
         </div>
         <div class="card">
           <div class="card-head"><h2>Recent runs</h2><a href="#runs">All runs</a></div>
-          ${table(['Result', 'Project', 'Changes', 'Pull request', 'By', 'Engine', 'When'], runs.slice(0, 8).map(runRow), 'No runs yet. Open a pull request that changes Terraform code.')}
+          ${table(['Result', 'Project', 'Changes', 'Pull request', 'People', 'Engine', 'When'], runs.slice(0, 8).map(runRow), 'No runs yet. Open a pull request that changes Terraform code.')}
+        </div>
+        <div class="card">
+          <div class="card-head"><h2>People</h2><span class="muted small">last 7 days</span></div>
+          ${peopleTable(runs)}
         </div>
         <div class="grid2">
           <div class="card">
             <div class="card-head"><h2>Locks</h2><a href="#locks">Manage</a></div>
-            ${table(['Project', 'Held by', 'Since'], locks.slice(0, 6).map(l => `<tr><td class="mono">${esc(l.project)}</td><td>${esc(repoName(l.repo))} #${l.pr} · ${esc(l.user)}</td><td class="muted">${ago(l.createdAt)}</td></tr>`), 'No projects are locked.')}
+            ${table(['Project', 'Pull request', 'Held by', 'Since'], locks.slice(0, 6).map(l => `<tr><td class="mono">${esc(l.project)}</td><td>${prLink(l)}</td><td>${who(l.user, l.links?.user, null, l.links?.userAvatar)}</td><td class="muted">${ago(l.createdAt)}</td></tr>`), 'No projects are locked.')}
           </div>
           <div class="card">
             <div class="card-head"><h2>Drift</h2><a href="#drift">Details</a></div>
@@ -134,25 +163,31 @@
       const runs = await api('/api/runs?limit=200');
       return `
         <div class="page-head"><h1>Runs</h1><span class="muted">${runs.length} most recent plans and applies</span></div>
-        <div class="card">${table(['Result', 'Project', 'Changes', 'Pull request', 'By', 'Engine', 'When'], runs.map(runRow), 'No runs yet.')}</div>`;
+        <div class="card">${table(['Result', 'Project', 'Changes', 'Pull request', 'People', 'Engine', 'When'], runs.map(runRow), 'No runs yet.')}</div>`;
     },
 
     async run(id) {
       const r = await api(`/api/runs/${encodeURIComponent(id)}`);
       const s = summaryOf(r);
-      const link = prUrl(r.repo, r.pr);
+      const L = r.links || {};
       const dangerous = s ? s.changes.filter(c => c.action === 'delete' || c.action === 'replace') : [];
       return `
         <div class="detail-head">
           <a href="#runs" class="small">← All runs</a>
           <div class="page-head"><h1 class="mono">${esc(r.project)}</h1>${statusPill(r)}</div>
           <div class="meta">
-            <span><b>${esc(r.kind)}</b> by ${esc(r.user)}</span>
-            <span>${link ? `<a href="${esc(link)}" target="_blank" rel="noopener">${esc(repoName(r.repo))} #${r.pr}</a>` : `${esc(repoName(r.repo))} #${r.pr}`}</span>
-            <span class="mono">${esc(r.headSha.slice(0, 7))}</span>
+            <span><b>${esc(r.kind)}</b></span>
+            <span>${prLink(r)}</span>
+            <span>${ext(L.commit, `<span class="mono">${esc(r.headSha.slice(0, 7))}</span>`, 'plain')}</span>
             <span>${esc(r.engine)}</span>
             <span title="${esc(when(r.startedAt))}">${ago(r.startedAt)}${r.finishedAt ? ` · took ${duration(r.startedAt, r.finishedAt)}` : ''}</span>
           </div>
+          <div class="people">${runPeople(r, 'av-lg')}</div>
+          ${L.pr ? `<div class="links">
+            <a href="${esc(L.pr)}" target="_blank" rel="noopener noreferrer">Pull request on ${esc(L.platform)} ↗</a>
+            <a href="${esc(L.commit)}" target="_blank" rel="noopener noreferrer">Commit ${esc(r.headSha.slice(0, 7))} ↗</a>
+            <a href="${esc(L.tree)}" target="_blank" rel="noopener noreferrer">Project files ↗</a>
+          </div>` : ''}
         </div>
         ${r.targets?.length ? `<div class="banner note">Targeted plan: only ${r.targets.map(t => `<code>${esc(t)}</code>`).join(', ')}.</div>` : ''}
         ${dangerous.length ? `<div class="banner"><b>${dangerous.length} resource${dangerous.length === 1 ? '' : 's'} will be destroyed or replaced.</b></div>` : ''}
@@ -168,12 +203,11 @@
       const locks = await api('/api/locks');
       return `
         <div class="page-head"><h1>Locks</h1><span class="muted">A PR holds a project from its first plan until it merges, closes or unlocks</span></div>
-        <div class="card">${table(['Project', 'Workspace', 'Repository', 'Pull request', 'Locked by', 'Since', ''], locks.map(l => {
-          const link = prUrl(l.repo, l.pr);
+        <div class="card">${table(['Project', 'Workspace', 'Pull request', 'Locked by', 'Since', ''], locks.map(l => {
           return `<tr>
-            <td class="mono">${esc(l.project)}</td><td class="mono muted">${esc(l.workspace)}</td><td>${esc(repoName(l.repo))}</td>
-            <td>${link ? `<a href="${esc(link)}" target="_blank" rel="noopener">#${l.pr}</a>` : `#${l.pr}`}</td>
-            <td>${esc(l.user)}</td><td class="muted" title="${esc(when(l.createdAt))}">${ago(l.createdAt)}</td>
+            <td class="mono">${esc(l.project)}</td><td class="mono muted">${esc(l.workspace)}</td>
+            <td>${prLink(l)}</td>
+            <td>${who(l.user, l.links?.user, null, l.links?.userAvatar)}</td><td class="muted" title="${esc(when(l.createdAt))}">${ago(l.createdAt)}</td>
             <td>${adminButton('Unlock', `data-unlock='${esc(JSON.stringify({ repo: l.repo, project: l.project, workspace: l.workspace }))}'`)}</td>
           </tr>`;
         }), 'No projects are locked.')}</div>`;
@@ -202,14 +236,14 @@
         ${findings.map(d => {
           const f = d.finding;
           return `<div class="card">
-            <div class="card-head"><h2><span class="mono">${esc(d.project)}</span> <span class="muted">· ${esc(repoName(d.repo))} @ ${esc(d.branch)} · ${esc(d.sha.slice(0, 7))}</span></h2>${driftPill(d)}</div>
-            ${f.error ? `<pre class="log">${esc(f.error)}</pre>` : table(['Resource', 'What happened', 'Last changed by', 'Commit'], f.drift.map(x => `<tr>
-              <td class="mono">${esc(x.address)}</td><td>${esc(PAST[x.action] || x.action)} outside Terraform</td>
-              <td>${x.author ? `<b>${esc(x.author.name)}</b> <span class="muted small">${esc(x.author.email)}</span>` : '<span class="muted">unknown</span>'}</td>
-              <td class="wrap">${x.author ? `<span class="mono">${esc(x.author.sha.slice(0, 7))}</span> <span class="muted">${esc(x.author.subject)}</span>` : ''}</td>
+            <div class="card-head"><h2>${ext(d.links?.tree, `<span class="mono">${esc(d.project)}</span>`, 'plain')} <span class="muted">· ${esc(repoName(d.repo))} @ ${esc(d.branch)} · ${ext(d.links?.commit, esc(d.sha.slice(0, 7)), 'plain')}</span></h2>${driftPill(d)}</div>
+            ${f.error ? `<pre class="log">${esc(f.error)}</pre>` : table(['Resource', 'What happened', 'Last changed by', 'In commit'], f.drift.map(x => `<tr>
+              <td class="mono">${ext(x.links?.file, esc(x.address), 'plain')}</td><td>${esc(PAST[x.action] || x.action)} outside Terraform</td>
+              <td>${x.author ? `${who(x.author.name, x.links?.author, null, x.links?.authorAvatar)}<div class="muted small">${esc(x.links?.authorLogin ? `@${x.links.authorLogin}` : x.author.email)}</div>` : '<span class="muted">unknown</span>'}</td>
+              <td class="wrap">${x.author ? `${ext(x.links?.commit, `<span class="mono">${esc(x.author.sha.slice(0, 7))}</span>`, 'plain')} <span class="muted">${esc(x.author.subject)}</span>` : ''}</td>
             </tr>`), 'Nothing changed outside Terraform.')}
             <div class="card-foot">
-              <span class="muted small">${f.lastApply ? `Last applied by <b>${esc(f.lastApply.user)}</b> via PR #${f.lastApply.pr}` : 'Never applied through tfv'}${f.pending && Object.values(f.pending).some(Boolean) ? ` · merged but not applied: ${counts(f.pending)}` : ''}</span>
+              <span class="muted small">${f.lastApply ? `Last applied by ${who(f.lastApply.user, f.lastApply.links?.user, null, f.lastApply.links?.userAvatar)} via ${ext(f.lastApply.links?.pr, `PR #${f.lastApply.pr}`, 'plain')}` : 'Never applied through tfv'}${f.pending && Object.values(f.pending).some(Boolean) ? ` · merged but not applied: ${counts(f.pending)}` : ''}</span>
               <span class="muted small">checked ${ago(d.at)}${d.notified ? ` · notified ${d.notified.map(n => esc(n.channel)).join(', ')}` : ''}</span>
             </div>
           </div>`;
@@ -221,12 +255,33 @@
       return `
         <div class="page-head"><h1>Audit log</h1><span class="muted">Every permission decision, allowed or denied</span></div>
         <div class="card">${table(['When', 'User', 'Action', 'Project', 'Pull request', 'Result'], entries.map(a => `<tr>
-          <td class="muted" title="${esc(when(a.at))}">${ago(a.at)}</td><td><b>${esc(a.user)}</b></td><td class="mono">${esc(a.action)}</td>
-          <td class="mono">${esc(a.project)}</td><td>${esc(repoName(a.repo))} #${a.pr}</td>
+          <td class="muted" title="${esc(when(a.at))}">${ago(a.at)}</td><td>${who(a.user, a.links?.user, null, a.links?.userAvatar)}</td><td class="mono">${esc(a.action)}</td>
+          <td class="mono">${esc(a.project)}</td><td>${prLink(a)}</td>
           <td class="wrap">${a.allowed ? '<span class="pill ok">allowed</span>' : `<span class="pill bad">denied</span> <span class="muted">${esc(a.reason.replace(/`/g, ''))}</span>`}</td>
         </tr>`), 'No decisions recorded yet.')}</div>`;
     },
   };
+
+  // Who has been planning and applying, most active first.
+  function peopleTable(runs) {
+    const since = Date.now() - 7 * 86400e3;
+    const by = new Map();
+    for (const r of runs) {
+      if (Date.parse(r.startedAt) < since) continue;
+      const p = by.get(r.user) || { name: r.user, url: r.links?.user, avatar: r.links?.userAvatar, plans: 0, applies: 0, failed: 0, prs: new Set(), last: r.startedAt };
+      p[r.kind === 'apply' ? 'applies' : 'plans']++;
+      if (r.status === 'failed') p.failed++;
+      p.prs.add(`${r.repo}#${r.pr}`);
+      if (r.startedAt > p.last) p.last = r.startedAt;
+      by.set(r.user, p);
+    }
+    const rows = [...by.values()].sort((a, b) => (b.plans + b.applies) - (a.plans + a.applies)).map(p => `<tr>
+      <td>${who(p.name, p.url, null, p.avatar)}</td>
+      <td class="num">${p.plans}</td><td class="num">${p.applies}</td>
+      <td class="num">${p.failed ? `<span class="pill bad">${p.failed}</span>` : '0'}</td>
+      <td class="num">${p.prs.size}</td><td class="muted">${ago(p.last)}</td></tr>`);
+    return table(['Person', 'Plans', 'Applies', 'Failed', 'Pull requests', 'Last active'], rows, 'Nobody has run anything this week.');
+  }
 
   function driftPill(d) {
     if (d.status === 'error') return '<span class="pill bad">check failed</span>';

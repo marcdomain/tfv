@@ -34,6 +34,8 @@ export interface Run {
   hasChanges: boolean;
   destroys: number;           // deletes + replaces
   targets: string[];          // -target addresses for a targeted plan
+  prAuthor: string;           // who opened the PR
+  dir: string;                // project folder in the repo
 }
 
 export interface AuditEntry {
@@ -84,6 +86,8 @@ const toRun = (r: Record<string, any>): Run => ({
   summary: r.summary, output: r.output, planPath: r.plan_path,
   hasChanges: !!r.has_changes, destroys: r.destroys,
   targets: r.targets ? JSON.parse(r.targets) : [],
+  prAuthor: r.pr_author ?? '',
+  dir: r.dir ?? '',
 });
 
 const toLock = (r: Record<string, any>): Lock => ({
@@ -103,6 +107,8 @@ export class Store {
     // Columns added after the first release.
     const cols = this.db.prepare('PRAGMA table_info(runs)').all().map((c: Record<string, any>) => c.name);
     if (!cols.includes('targets')) this.db.exec(`ALTER TABLE runs ADD COLUMN targets TEXT NOT NULL DEFAULT ''`);
+    if (!cols.includes('pr_author')) this.db.exec(`ALTER TABLE runs ADD COLUMN pr_author TEXT NOT NULL DEFAULT ''`);
+    if (!cols.includes('dir')) this.db.exec(`ALTER TABLE runs ADD COLUMN dir TEXT NOT NULL DEFAULT ''`);
   }
 
   close() { this.db.close(); }
@@ -143,10 +149,10 @@ export class Store {
 
   // ---- runs ----
 
-  startRun(r: { repo: string; pr: number; project: string; workspace: string; kind: RunKind; headSha: string; user: string; targets?: string[] }): number {
+  startRun(r: { repo: string; pr: number; project: string; workspace: string; kind: RunKind; headSha: string; user: string; targets?: string[]; prAuthor?: string; dir?: string }): number {
     const res = this.db.prepare(
-      'INSERT INTO runs (repo, pr, project, workspace, kind, status, head_sha, user, started_at, targets) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
-    ).run(r.repo, r.pr, r.project, r.workspace, r.kind, 'running', r.headSha, r.user, now(), r.targets?.length ? JSON.stringify(r.targets) : '');
+      'INSERT INTO runs (repo, pr, project, workspace, kind, status, head_sha, user, started_at, targets, pr_author, dir) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+    ).run(r.repo, r.pr, r.project, r.workspace, r.kind, 'running', r.headSha, r.user, now(), r.targets?.length ? JSON.stringify(r.targets) : '', r.prAuthor ?? '', r.dir ?? '');
     return Number(res.lastInsertRowid);
   }
 

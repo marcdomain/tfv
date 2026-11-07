@@ -7,6 +7,9 @@ import type { VcsAdapter, Platform } from './vcs/types.ts';
 import type { App } from './app.ts';
 import type { Store } from './store.ts';
 import type { DriftScheduler } from './drift.ts';
+import type { Person } from './config.ts';
+import { presenter } from './present.ts';
+import { Avatars } from './avatars.ts';
 import {
   type AuthConfig, type Oidc, type Role, type Session, checkLogin, newSession, parseCookies, unsign,
   RateLimiter, cookie, SESSION_COOKIE, OIDC_COOKIE,
@@ -68,6 +71,9 @@ export interface HttpDeps {
   ready: () => boolean;
   drift?: DriftScheduler;
   loginLimiter?: RateLimiter;
+  platforms?: Record<string, Platform>;       // host → platform, for links
+  people?: Person[];
+  avatars?: Avatars;
 }
 
 const defaultLimiter = new RateLimiter(10, 15 * 60_000);
@@ -90,7 +96,9 @@ const redirect = (res: ServerResponse, location: string, setCookie?: string[]) =
   res.end();
 };
 
-export const createHttpServer = (deps: HttpDeps): Server => createServer(async (req, res) => {
+export const createHttpServer = (deps: HttpDeps): Server => {
+  const show = presenter(deps.platforms ?? {}, deps.people ?? []);
+  return createServer(async (req, res) => {
   const url = new URL(req.url ?? '/', 'http://localhost');
   try {
     if (req.method === 'GET' && url.pathname === '/healthz') return send(res, 200, { ok: true });
@@ -170,6 +178,16 @@ export const createHttpServer = (deps: HttpDeps): Server => createServer(async (
       return send(res, 200, { ok: true });
     }
 
+    // Avatars, served from here (signed-in users only; known hosts only).
+    const av = /^\/avatars\/([^/]+)\/([^/]+)$/.exec(url.pathname);
+    if (req.method === 'GET' && av) {
+      if (!whoIs(req, auth) || !deps.avatars) return send(res, 404, { error: 'not found' });
+      const img = await deps.avatars.get(decodeURIComponent(av[1]), decodeURIComponent(av[2]));
+      if (!img) return send(res, 404, { error: 'no avatar' });
+      res.writeHead(200, { 'Content-Type': img.type, 'Cache-Control': 'private, max-age=86400', 'X-Content-Type-Options': 'nosniff' });
+      return res.end(img.body);
+    }
+
     // ---- API: viewers read, admins act ----------------------------------------
     if (url.pathname.startsWith('/api/')) {
       const who = whoIs(req, auth);
@@ -201,18 +219,18 @@ export const createHttpServer = (deps: HttpDeps): Server => createServer(async (
       }
 
       if (req.method === 'GET') {
-        if (url.pathname === '/api/locks') return send(res, 200, deps.store.allLocks());
+        if (url.pathname === '/api/locks') return send(res, 200, deps.store.allLocks().map(show.lock));
         if (url.pathname === '/api/runs') {
-          return send(res, 200, deps.store.recentRuns(Math.min(200, Number(url.searchParams.get('limit') ?? 50))).map(r => ({ ...r, output: undefined })));
+          return send(res, 200, deps.store.recentRuns(Math.min(200, Number(url.searchParams.get('limit') ?? 50))).map(r => ({ ...show.run(r), output: undefined })));
         }
         const run = /^\/api\/runs\/(\d+)$/.exec(url.pathname);
         if (run) {
           const r = deps.store.getRun(Number(run[1]));
-          return r ? send(res, 200, r) : send(res, 404, { error: 'not found' });
+          return r ? send(res, 200, show.run(r)) : send(res, 404, { error: 'not found' });
         }
-        if (url.pathname === '/api/audit') return send(res, 200, deps.store.auditLog(200));
+        if (url.pathname === '/api/audit') return send(res, 200, deps.store.auditLog(200).map(show.audit));
         if (url.pathname === '/api/ping') return send(res, 200, { ok: true });
-        if (url.pathname === '/api/drift') return send(res, 200, deps.store.recentDrift(200));
+        if (url.pathname === '/api/drift') return send(res, 200, deps.store.recentDrift(200).map(show.drift));
         if (url.pathname === '/api/drift/schedules') {
           return send(res, 200, (deps.drift?.schedules ?? []).map(e => ({
             key: e.key, source: e.source, repo: e.repo.fullName, branch: e.branch, name: e.spec.name ?? null,
@@ -235,3 +253,4 @@ export const createHttpServer = (deps: HttpDeps): Server => createServer(async (
     if (!res.headersSent) send(res, 400, { error: 'bad request' });
   }
 });
+};

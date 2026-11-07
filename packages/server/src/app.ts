@@ -12,6 +12,8 @@ import {
   repoPolicyFor, rulesFor, checkPermission, currentApprovers, applyBlockers, type Lookup, type EffectiveRules,
 } from './policy.ts';
 import { renderComment, renderCheck, type ProjectView } from './render.ts';
+import { repoLinks, platformForHost } from './links.ts';
+import { avatarSource } from './avatars.ts';
 import { plan as runPlan, apply as runApply, engineLabel, toolEnv, type ToolResolver, type ToolSet } from './runner.ts';
 import { checkout as gitCheckout } from './git.ts';
 import { log } from './log.ts';
@@ -300,7 +302,7 @@ export class App {
     const { store, config } = this.deps;
     const checkName = `tfv: ${project.name}`;
     const started = Date.now();
-    const runId = store.startRun({ repo: ctx.repoKey, pr: ctx.pr.number, project: project.name, workspace: project.workspace, kind: 'plan', headSha: ctx.pr.headSha, user, targets: opts.targets });
+    const runId = store.startRun({ repo: ctx.repoKey, pr: ctx.pr.number, project: project.name, workspace: project.workspace, kind: 'plan', headSha: ctx.pr.headSha, user, targets: opts.targets, prAuthor: ctx.pr.author, dir: project.dir });
     await this.check(ctx, { name: checkName, headSha: ctx.pr.headSha, externalId: project.name, status: 'in_progress', title: 'Planning…', summary: `Planning \`${project.name}\`` });
 
     let engine = '';
@@ -414,7 +416,7 @@ export class App {
   private async applyProject(ctx: PrContext, project: Project, user: string, plan: Run) {
     const { store, config } = this.deps;
     const started = Date.now();
-    const runId = store.startRun({ repo: ctx.repoKey, pr: ctx.pr.number, project: project.name, workspace: project.workspace, kind: 'apply', headSha: ctx.pr.headSha, user });
+    const runId = store.startRun({ repo: ctx.repoKey, pr: ctx.pr.number, project: project.name, workspace: project.workspace, kind: 'apply', headSha: ctx.pr.headSha, user, prAuthor: ctx.pr.author, dir: project.dir });
     await this.check(ctx, { name: `tfv: ${project.name}`, headSha: ctx.pr.headSha, externalId: project.name, status: 'in_progress', title: 'Applying…', summary: `Applying \`${project.name}\` for @${user}` });
     let engine = plan.engine;
     try {
@@ -484,7 +486,7 @@ export class App {
     const views: ProjectView[] = [];
     for (const plan of plans) {
       const project = ctx.projects.find(p => p.name === plan.project) ?? { name: plan.project, dir: plan.project, deps: [] } as unknown as Project;
-      const view: ProjectView = { name: plan.project, plan, apply: applies.get(`${plan.project}::${plan.workspace}`), note: notes.get(plan.project) };
+      const view: ProjectView = { name: plan.project, plan, apply: applies.get(`${plan.project}::${plan.workspace}`), note: notes.get(plan.project), dir: project.dir };
       if (plan.status === 'success' && plan.hasChanges) {
         view.blockers = await applyBlockers(project, this.rules(ctx, project), ctx.pr, approvers, ctx.lookup);
       }
@@ -494,10 +496,19 @@ export class App {
     if (!views.length) return;
     views.sort((a, b) => a.name.localeCompare(b.name));
 
+    const l = repoLinks(ctx.repoKey, platformForHost(ctx.repo.host, { [ctx.repo.host]: ctx.repo.platform }));
     const body = renderComment({
       marker: MARKER, headSha: head, command: config.commandNames[0], projects: views,
       dashboardUrl: config.publicUrl, limit: ctx.adapter.commentLimit, warnings: ctx.warnings,
       oneProjectPerApply: this.oneAtATime(ctx),
+      approvers,
+      links: {
+        commit: sha => l.commit(sha),
+        tree: (sha, dir) => l.tree(sha, dir),
+        user: login => l.user(login),
+        avatar: login => (avatarSource(ctx.repo.platform, ctx.repo.host, login) ? `https://${ctx.repo.host}/${encodeURIComponent(login)}.png?size=36` : null),
+        run: id => `${config.publicUrl}/#runs/${id}`,
+      },
     });
     await ctx.adapter.upsertComment(ctx.repo, ctx.pr.number, MARKER, body);
   }

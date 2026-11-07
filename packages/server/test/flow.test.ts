@@ -146,8 +146,14 @@ test('1. push → autoplan both projects, sticky comment + checks with Apply but
   assert.ok(body.startsWith(MARKER));
   assert.match(body, /tfv · 2 projects/);
   assert.match(body, /\[!CAUTION\]/);
-  assert.match(body, /\| `envs\/dev` \| terraform 1\.9\.8 \| ⚠️ \*\*\+3 ~1 ±1 −1\*\* \| 🔒 1 more approval from write \|/);
-  assert.match(body, /\| `envs\/prod` \|.*\| 🔒 1 more approval from team:platform-admins \|/);
+  assert.match(body, /\| \[`envs\/dev`\]\([^)]+\) \| terraform 1\.9\.8 \| ⚠️ \*\*\+3 ~1 ±1 −1\*\* \| 🔒 1 more approval from write \|/);
+  assert.match(body, /\| \[`envs\/prod`\]\([^)]+\) \|.*\| 🔒 1 more approval from team:platform-admins \|/);
+  // Rich parts: counts, who ran it (avatar + profile link, no @mention), next steps.
+  assert.match(body, /<sub>⚠️ 4 to destroy or replace · 🔒 2 waiting<\/sub>/);
+  assert.match(body, /\| <img src="https:\/\/github\.com\/bob\.png\?size=36" width="18" height="18" align="center" alt=""> \[bob\]\(https:\/\/github\.com\/bob\) \|/);
+  assert.doesNotMatch(body, /@bob/);
+  assert.match(body, /\*\*Next steps\*\*\n- 🔒 \*\*`envs\/dev`\*\* needs 1 more approval from write\n- 🔒 \*\*`envs\/prod`\*\* needs 1 more approval from team:platform-admins/);
+  assert.match(body, /\[Open in the tfv dashboard\]\(https:\/\/tfv\.example\.com\/#runs\/\d+\)/);
   const check = gh.checks.get('tfv: envs/prod')!;
   assert.equal(check.conclusion, 'neutral');
   assert.equal(check.actions?.[0].identifier, 'apply');
@@ -173,7 +179,9 @@ test('3. stale approvals do not count; fresh ones do', async () => {
   const applies = store.latestRuns('github.com/acme/infra', 1, 'apply');
   assert.deepEqual(applies.map(a => [a.project, a.status]), [['envs/dev', 'success']]);
   assert.doesNotMatch(applies[0].output, /LEAK/); // server secrets stripped from terraform's env
-  assert.match(gh.sticky.get(1)!, /\| `envs\/dev` \|.*\| ✅ applied \|/);
+  assert.match(gh.sticky.get(1)!, /\| \[`envs\/dev`\]\([^)]+\) \|.*\| ✅ applied \|/);
+  assert.match(gh.sticky.get(1)!, /\*\*Approved by\*\* <img src="https:\/\/github\.com\/carol\.png\?size=36"[^>]*> \[carol\]\(https:\/\/github\.com\/carol\)/);
+  assert.match(gh.sticky.get(1)!, /- 🟢 \*\*`envs\/prod`\*\* is ready: comment `tfv apply -p envs\/prod`/);
 });
 
 test('4. Apply button on prod: a platform-admin applies after a team approval', async () => {
@@ -197,7 +205,7 @@ test('5. a second PR is blocked by the lock, and unblocked after merge', async (
   assert.equal(store.locksForPr('github.com/acme/infra', 1).length, 0);
 
   await comment(2, 'carol', 'tfv plan');
-  assert.match(gh.sticky.get(2)!, /\| `envs\/dev` \| terraform 1\.9\.8 \| ⚠️/);
+  assert.match(gh.sticky.get(2)!, /\| \[`envs\/dev`\]\([^)]+\) \| terraform 1\.9\.8 \| ⚠️/);
 });
 
 test('6. read-only users cannot run code; fork-style autoplan is held', async () => {
@@ -249,6 +257,6 @@ test('9. one project at a time: a bare apply is refused with exact commands; tar
   assert.deepEqual(dev.targets, ['terraform_data.cdn', 'terraform_data.worker[0]']);
   assert.match(dev.output, /ARGS .*-target=terraform_data\.cdn -target=terraform_data\.worker\[0\]/);
   const body = gh.sticky.get(9)!;
-  assert.match(body, /\| `envs\/dev` \|.*🎯 targeted \|/);
+  assert.match(body, /\| \[`envs\/dev`\]\([^)]+\) \|.*🎯 targeted \|/);
   assert.match(body, /\[!NOTE\]\n> \*\*Targeted plan:\*\* only `terraform_data.cdn`, `terraform_data.worker\[0\]`/);
 });

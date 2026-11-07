@@ -29,6 +29,7 @@ const { tfvResolver } = await import('./runner.ts');
 const { tfv } = await import('./tfv.ts');
 const { DriftScheduler } = await import('./drift.ts');
 const { Oidc } = await import('./auth.ts');
+const { Avatars } = await import('./avatars.ts');
 
 const store = new Store(join(config.dataDir, 'tfv.db'));
 const app = new App({ config, store, resolver: tfvResolver(config.defaultVersion) });
@@ -47,6 +48,9 @@ let ready = false;
 let stopping = false;
 const server = createHttpServer({
   app, store, adapters, drift, auth: config.auth,
+  platforms: config.github ? { [config.github.host]: 'github' } : {},
+  people: config.people,
+  avatars: new Avatars(config.dataDir, config.github ? { [config.github.host]: 'github' } : {}),
   oidc: config.auth.oidc ? new Oidc(config.auth.oidc, config.publicUrl) : undefined,
   ready: () => ready && !stopping,
 });

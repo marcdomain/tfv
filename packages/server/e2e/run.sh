@@ -72,7 +72,7 @@ PR="{\"number\":1,\"title\":\"Add dev app\",\"html_url\":\"x\",\"user\":{\"login
 comment() { hook issue_comment "{\"action\":\"created\",\"installation\":{\"id\":1},\"repository\":$REPO,\"issue\":{\"number\":1,\"pull_request\":{}},\"comment\":{\"id\":$1,\"body\":\"$2\",\"user\":{\"login\":\"bob\",\"type\":\"User\"}}}"; }
 
 hook pull_request "{\"action\":\"opened\",\"installation\":{\"id\":1},\"repository\":$REPO,\"pull_request\":$PR}"
-wait_for "autoplan posted the summary comment" "s.comments.some(c => c.body.includes('| \`envs/dev\` | terraform 1.9.8 | 📝 **+1**'))"
+wait_for "autoplan posted the summary comment" "s.comments.some(c => c.body.includes('envs/dev') && c.body.includes('| terraform 1.9.8 | 📝 **+1**') && c.body.includes('**Next steps**'))"
 wait_for "check run with an Apply button" "s.checks.some(c => c.name === 'tfv: envs/dev' && c.status === 'completed' && c.actions?.[0]?.identifier === 'apply')"
 
 comment 101 "tfv apply"

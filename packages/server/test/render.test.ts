@@ -12,7 +12,7 @@ const noChange = summarizePlan(JSON.parse(fixture('plan-nochange.json')));
 const run = (over: Partial<Run>): Run => ({
   id: 1, repo: 'github.com/acme/infra', pr: 7, project: 'envs/prod', workspace: 'default', kind: 'plan',
   status: 'success', headSha: 'abc1234def', user: 'bob', startedAt: '', finishedAt: '', engine: 'terraform 1.9.8',
-  summary: JSON.stringify(changes), output: fixture('plan-changes.txt'), planPath: '/x', hasChanges: true, destroys: 2, targets: [], ...over,
+  summary: JSON.stringify(changes), output: fixture('plan-changes.txt'), planPath: '/x', hasChanges: true, destroys: 2, targets: [], prAuthor: 'bob', dir: 'envs/prod', ...over,
 });
 
 test('summarizes a real terraform plan', () => {

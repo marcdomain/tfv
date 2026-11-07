@@ -17,18 +17,24 @@ export const git = (cwd: string, args: string[], auth?: CloneAuth): Promise<stri
   });
 });
 
+// Points origin at `url`, adding it if a checkout was interrupted before
+// the remote was created (e.g. the pod was killed mid-checkout).
+const ensureOrigin = async (dir: string, url: string) => {
+  try {
+    await git(dir, ['remote', 'set-url', 'origin', url]);
+  } catch {
+    await git(dir, ['remote', 'add', 'origin', url]);
+  }
+};
+
 /**
  * Makes `dir` a clean checkout of `sha`. Keeps .terraform and
  * .terragrunt-cache between runs so re-plans skip provider downloads.
  */
 export const checkout = async (dir: string, auth: CloneAuth, sha: string, prRef?: string): Promise<void> => {
   mkdirSync(dir, { recursive: true });
-  if (!existsSync(join(dir, '.git'))) {
-    await git(dir, ['init', '-q']);
-    await git(dir, ['remote', 'add', 'origin', auth.url]);
-  } else {
-    await git(dir, ['remote', 'set-url', 'origin', auth.url]);
-  }
+  if (!existsSync(join(dir, '.git'))) await git(dir, ['init', '-q']);
+  await ensureOrigin(dir, auth.url);
   try {
     await git(dir, ['fetch', '-q', '--depth=1', '--no-tags', 'origin', sha], auth);
   } catch (err) {
@@ -47,15 +53,11 @@ export const checkout = async (dir: string, auth: CloneAuth, sha: string, prRef?
  */
 export const checkoutBranch = async (dir: string, auth: CloneAuth, branch: string): Promise<string> => {
   mkdirSync(dir, { recursive: true });
-  if (!existsSync(join(dir, '.git'))) {
-    await git(dir, ['init', '-q']);
-    await git(dir, ['remote', 'add', 'origin', auth.url]);
-    // Mark origin as a promisor so missing blobs are fetched on demand.
-    await git(dir, ['config', 'remote.origin.promisor', 'true']);
-    await git(dir, ['config', 'remote.origin.partialclonefilter', 'blob:none']);
-  } else {
-    await git(dir, ['remote', 'set-url', 'origin', auth.url]);
-  }
+  if (!existsSync(join(dir, '.git'))) await git(dir, ['init', '-q']);
+  await ensureOrigin(dir, auth.url);
+  // Mark origin as a promisor so missing blobs are fetched on demand.
+  await git(dir, ['config', 'remote.origin.promisor', 'true']);
+  await git(dir, ['config', 'remote.origin.partialclonefilter', 'blob:none']);
   const ref = `refs/remotes/origin/${branch}`;
   await git(dir, ['fetch', '-q', '--filter=blob:none', '--no-tags', 'origin', `+refs/heads/${branch}:${ref}`], auth);
   await git(dir, ['checkout', '-q', '--force', '--detach', ref], auth);
