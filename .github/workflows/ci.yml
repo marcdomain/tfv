@@ -1,0 +1,75 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: ${{ matrix.os }} / node ${{ matrix.node }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+        node: [22, 24]
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: ${{ matrix.node }}
+          cache: 'npm'
+
+      # Skip our own postinstall here; the smoke test below runs it on purpose.
+      - run: npm ci --ignore-scripts
+
+      - run: npm test
+
+      - name: Smoke test install setup and CLI
+        shell: bash
+        run: |
+          node lib/utils/postInstall.js
+          test -f "$HOME/.tfv/.setup"
+          node index.js --help > /dev/null
+          node index.js auto-switch --help > /dev/null
+
+      - name: Check shell hooks parse (bash / zsh)
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          node index.js shell-init bash > hook.bash && bash -n hook.bash
+          if command -v zsh > /dev/null; then node index.js shell-init zsh > hook.zsh && zsh -n hook.zsh; fi
+
+      - name: Check shell hook parses (PowerShell)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $hook = node index.js shell-init powershell | Out-String
+          $errors = $null
+          [System.Management.Automation.Language.Parser]::ParseInput($hook, [ref]$null, [ref]$errors) | Out-Null
+          if ($errors) { $errors; exit 1 }
+
+  package:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+
+      - name: Package stays small and has no stray files
+        run: |
+          npm pack --dry-run --json > pack.json
+          node -e "
+            const [p] = require('./pack.json');
+            const bad = p.files.map(f => f.path).filter(f => !/^(index\.js|package\.json|README\.md|LICENSE|lib\/)/.test(f));
+            console.log('size', p.size, 'bytes,', p.files.length, 'files');
+            if (bad.length) { console.error('unexpected files:', bad); process.exit(1); }
+            if (p.size > 200000) { console.error('package over 200 kB'); process.exit(1); }
+          "

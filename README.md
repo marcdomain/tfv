@@ -14,7 +14,7 @@
 
 `tfv` lets you install, switch, and manage multiple versions of **Terraform** and **OpenTofu** without `sudo`. All binaries live in `~/.tfv/` — upgrading `tfv` itself never wipes your installed versions.
 
-![tfv demo](demo.gif)
+![tfv demo](https://raw.githubusercontent.com/marcdomain/tfv/main/demo.gif)
 
 ---
 
@@ -127,7 +127,9 @@ tfv as --provider tofu
 
 Reads version from (in priority order):
 
-1. `.terraform-version` file in current directory
+1. A version file in the current directory:
+   - Terraform: `.terraform-version`, `.tfswitchrc`, `.tfswitch.toml`, or a `terraform` line in `.tool-versions` (asdf / mise)
+   - OpenTofu: `.opentofu-version`, `.tofu-version`, an `opentofu` or `tofu` line in `.tool-versions`, then `.terraform-version`
 2. `terraform.tfstate` → `terraform_version` field
 3. `required_version` in any `.tf` file — supports all constraint operators:
    `=`, `>=`, `>`, `<=`, `<`, `!=`, `~>`, and compound `">= 1.3, < 2.0"`
@@ -140,8 +142,11 @@ Wraps `cd` so that entering a directory automatically switches the terraform ver
 
 A directory is considered a terraform project if it contains:
 
-- a `.terraform-version` file, **or**
+- a version file (`.terraform-version`, `.opentofu-version`, `.tofu-version`, `.tfswitchrc`, `.tfswitch.toml`), **or**
+- a `.tool-versions` file with a `terraform`, `opentofu` or `tofu` line, **or**
 - any `*.tf` files
+
+The hook switches Terraform as above, and also switches OpenTofu when the project pins it with its own file (`.opentofu-version`, `.tofu-version` or `.tool-versions`).
 
 ```sh
 cd ~/Downloads           # no .tf files → nothing happens
