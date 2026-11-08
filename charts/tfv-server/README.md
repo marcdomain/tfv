@@ -86,7 +86,7 @@ HttpOnly cookies. The chart generates the signing key once and keeps it across u
 | `config.parallelism` | `4` | Plans and applies running at once, shared fairly between PRs |
 | `config.preinstall` | `[]` | e.g. `[terraform@1.9.8, tofu@1.8.5]` |
 | `repos` | `{}` | Full `repos.yaml`: rules, approvers, channels, people, drift schedules |
-| `extraEnvFrom` / `extraEnv` | `[]` | Cloud credentials, `TFV_SLACK_TOKEN`, `TFV_TEAMS_WEBHOOK`, … |
+| `extraEnvFrom` / `extraEnv` | `[]` | Cloud credentials, `TFV_SLACK_TOKEN`, `TFV_TEAMS_WEBHOOK`, `GITHUB_TOKEN` (for OpenTofu/Terragrunt downloads), … |
 | `serviceAccount.annotations` | `{}` | Workload identity: IRSA, GKE, Azure |
 | `persistence.size` | `20Gi` | Checkouts, saved plans, binaries, provider cache, database |
 | `serviceMonitor.enabled` | `false` | Prometheus scraping of `/metrics` |

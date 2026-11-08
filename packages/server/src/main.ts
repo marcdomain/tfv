@@ -26,7 +26,7 @@ const { App } = await import('./app.ts');
 const { GitHubAdapter } = await import('./vcs/github.ts');
 const { createHttpServer } = await import('./http.ts');
 const { tfvResolver } = await import('./runner.ts');
-const { tfv } = await import('./tfv.ts');
+const { tfv, setDownloadToken } = await import('./tfv.ts');
 const { DriftScheduler } = await import('./drift.ts');
 const { Oidc } = await import('./auth.ts');
 const { Avatars } = await import('./avatars.ts');
@@ -39,6 +39,18 @@ const drift = new DriftScheduler({
   adapters: Object.values(adapters).filter(a => a !== undefined),
   limited: fn => app.limited(fn),
 });
+// Downloads of OpenTofu and Terragrunt from GitHub use the App's token (higher limits,
+// and no anonymous-request timeouts), unless GITHUB_TOKEN is set. Installation tokens
+// last an hour, so it's renewed every 45 minutes.
+if (adapters.github && !process.env.GITHUB_TOKEN && !process.env.GH_TOKEN) {
+  const gh = adapters.github;
+  const renew = () => gh.downloadToken()
+    .then(t => { setDownloadToken(t); if (!t) log.info('GitHub downloads are anonymous (no App installation on github.com)'); })
+    .catch(err => log.warn('could not get a GitHub token for downloads; they stay anonymous', { err: (err as Error).message }));
+  void renew();
+  setInterval(renew, 45 * 60_000).unref();
+}
+
 // Channel secrets are referenced by env var name; keep their values out of logs.
 for (const c of Object.values(config.channels)) {
   for (const name of [c.token_env, c.webhook_url_env]) if (name) addSecret(process.env[name]);

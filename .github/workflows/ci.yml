@@ -94,20 +94,29 @@ jobs:
       - name: End-to-end (mock GitHub, real git and terraform)
         run: packages/server/e2e/run.sh tfv-server:ci
 
-      # kind installed directly, version pinned and checksum verified: helm/kind-action@v1
-      # (v1.15.2) started failing its own checksum step, which broke this job.
+      # kind installed directly, version pinned and checksum verified. Downloads are
+      # authenticated (gh + the workflow token), since GitHub sometimes times out
+      # anonymous downloads (HTTP 504), and each one retries.
       - name: Create a kind cluster
         env:
           KIND_VERSION: v0.33.0
+          GH_TOKEN: ${{ github.token }}
         run: |
-          base="https://github.com/kubernetes-sigs/kind/releases/download/${KIND_VERSION}"
-          curl -fsSLo kind-linux-amd64 "$base/kind-linux-amd64"
-          curl -fsSLo kind-linux-amd64.sha256sum "$base/kind-linux-amd64.sha256sum"
+          get() { # get <repo> <tag> <file>
+            for i in 1 2 3 4 5 6; do
+              gh release download "$2" -R "$1" -p "$3" --clobber && return 0
+              echo "download of $3 failed (attempt $i); retrying in 10s"; sleep 10
+            done
+            return 1
+          }
+          get kubernetes-sigs/kind "$KIND_VERSION" kind-linux-amd64
+          get kubernetes-sigs/kind "$KIND_VERSION" kind-linux-amd64.sha256sum
           sha256sum -c kind-linux-amd64.sha256sum
           sudo install -m 0755 kind-linux-amd64 /usr/local/bin/kind
           rm kind-linux-amd64 kind-linux-amd64.sha256sum
           kind create cluster --name tfv-ci --wait 120s
           kubectl cluster-info --context kind-tfv-ci
+          get kubernetes-sigs/gateway-api v1.6.3 standard-install.yaml
 
       - uses: actions/setup-node@v5
         with:
@@ -115,7 +124,7 @@ jobs:
 
       - name: Install chart (Gateway API route, dashboard user) and run helm test
         run: |
-          kubectl apply --server-side -f https://github.com/kubernetes-sigs/gateway-api/releases/download/v1.6.3/standard-install.yaml
+          kubectl apply --server-side -f standard-install.yaml
           kind load docker-image tfv-server:ci --name tfv-ci
           openssl genrsa -out app.pem 2048
           HASH=$(printf 'ci-admin-password' | node packages/server/src/hash-password.ts)

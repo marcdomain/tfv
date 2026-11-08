@@ -75,6 +75,8 @@ project again Only these commands run, and arguments are checked, so nothing els
 | `TFV_PR_PARALLELISM` | parallelism − 1 | One PR's share, so other PRs always get a slot. Freed slots go to the PR with the fewest runs going |
 | `TFV_DEFAULT_VERSION` | `latest` | Tool version when a project pins none |
 | `TFV_PREINSTALL` | | Warm the cache, e.g. `terraform@1.9.8,tofu@1.8.5` |
+| `GITHUB_TOKEN` | | Optional: tfv uses its GitHub App automatically. Set it on servers without a github.com App (GitLab, Bitbucket, GitHub Enterprise) to download OpenTofu and Terragrunt as a signed-in user. Needs no permissions |
+| `TFV_GITHUB_MIRROR` / `TFV_HASHICORP_MIRROR` | | Download OpenTofu/Terragrunt and Terraform from your own mirror (Artifactory, Nexus) instead of GitHub and HashiCorp |
 | `TFV_DRIFT` | `true` | Run drift schedules |
 | `TFV_SESSION_SECRET` | random | Signs dashboard sessions (32+ characters). Set it, or sessions end on restart |
 | `TFV_API_TOKEN` | | Admin token for automation and `/api` |

@@ -85,6 +85,19 @@ export class GitHubAdapter implements VcsAdapter {
     return id;
   }
 
+  // A token for public GitHub downloads (OpenTofu, Terragrunt): any installation of
+  // the App will do. Only for github.com; a GitHub Enterprise App can't sign in there.
+  async downloadToken(): Promise<string | null> {
+    if (this.cfg.host !== 'github.com') return null;
+    const res = await this.fetchImpl(`${this.cfg.apiUrl}/app/installations?per_page=1`, {
+      headers: { Authorization: `Bearer ${appJwt(this.cfg.appId, this.cfg.privateKey)}`, Accept: 'application/vnd.github+json', 'User-Agent': 'tfv-server' },
+    });
+    if (!res.ok) return null;
+    const [first] = await res.json() as { id: number; account?: { login?: string } }[];
+    if (!first) return null;
+    return this.installationToken({ platform: 'github', host: this.cfg.host, owner: first.account?.login ?? '', name: '', fullName: `installation-${first.id}`, cloneUrl: '', installationId: first.id });
+  }
+
   private async installationToken(repo: Repo): Promise<string> {
     const id = await this.installationFor(repo);
     const cached = this.tokens.get(id);
