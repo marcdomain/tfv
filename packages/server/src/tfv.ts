@@ -23,3 +23,9 @@ export const tfv = (): TfvCore => {
   if (!core) core = createRequire(import.meta.url)('../../../lib/core/index.js') as TfvCore;
   return core;
 };
+
+// Hands tfv's downloader a GitHub token in-process (never via the environment, which
+// Terraform runs inherit).
+export const setDownloadToken = (token: string | null) => {
+  (createRequire(import.meta.url)('../../../lib/utils/net.js') as { setDownloadToken: (t: string | null) => void }).setDownloadToken(token);
+};

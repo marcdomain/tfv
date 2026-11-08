@@ -142,3 +142,16 @@ test('a repo with no installation id (dashboard, schedules) finds it once and re
   const none = new GitHubAdapter(cfg, async () => new Response('{}', { status: 404 }));
   await assert.rejects(none.comment({ ...repo, fullName: 'acme/other' }, 1, 'x'), /no GitHub App installation for acme\/other \(HTTP 404\); is the App installed on it\?/);
 });
+
+test('download token: from any installation of the App, github.com only', async () => {
+  const fake: typeof fetch = async (url) => {
+    const u = String(url);
+    if (u.endsWith('/app/installations?per_page=1')) return new Response(JSON.stringify([{ id: 31, account: { login: 'acme' } }]));
+    if (u.endsWith('/app/installations/31/access_tokens')) return new Response(JSON.stringify({ token: 'ghs_dl', expires_at: new Date(Date.now() + 3600e3).toISOString() }));
+    return new Response('{}', { status: 404 });
+  };
+  assert.equal(await new GitHubAdapter(cfg, fake).downloadToken(), 'ghs_dl');
+  assert.equal(await new GitHubAdapter({ ...cfg, host: 'github.acme.internal', apiUrl: 'https://github.acme.internal/api/v3' }, fake).downloadToken(), null, 'Enterprise App: not for github.com');
+  const none: typeof fetch = async () => new Response('[]');
+  assert.equal(await new GitHubAdapter(cfg, none).downloadToken(), null, 'not installed anywhere');
+});
