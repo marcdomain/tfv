@@ -190,3 +190,22 @@ test('dependency blocks: where they point and their mock values', async () => {
   // Real outputs: nothing flagged.
   assert.deepEqual(mockedDependencies('live/prod/app', deps, 'Plan: 1 to add', { variables: { vpc_id: { value: 'vpc-0a1b2c3d' } } }), []);
 });
+
+test('a unit without mock_outputs whose dependency is not applied: names the dependency', async () => {
+  const { terragruntDependencies, unappliedDependencies } = await import('../src/discovery.ts');
+  const deps = terragruntDependencies(root, 'live/prod/app', 'dependency "vpc" {\n  config_path = "${get_terragrunt_dir()}/../vpc"\n}\n');
+  assert.deepEqual(deps, [{ name: 'vpc', dir: 'live/prod/vpc', mocks: [] }]);
+  // Exact lines from terragrunt 0.83.2: relative to the unit, or (paths tidied) to the checkout.
+  const relative = '* ../vpc/terragrunt.hcl is a dependency of ./terragrunt.hcl but detected no outputs. Either the target module has not been applied yet, or the module has no outputs.';
+  assert.deepEqual(unappliedDependencies('live/prod/app', deps, relative), ['live/prod/vpc']);
+  const tidied = '* ./live/prod/vpc/terragrunt.hcl is a dependency of ./live/prod/app/terragrunt.hcl but detected no outputs.';
+  assert.deepEqual(unappliedDependencies('live/prod/app', deps, tidied), ['live/prod/vpc']);
+  assert.deepEqual(unappliedDependencies('live/prod/app', deps, 'Error: something else'), []);
+
+  const { renderComment } = await import('../src/render.ts');
+  const plan = { id: 1, repo: 'r', pr: 1, project: 'live/prod/app', dir: 'live/prod/app', workspace: 'default', kind: 'plan', status: 'failed', headSha: 'abc1234', user: 'bob', prAuthor: 'bob', startedAt: '', finishedAt: '', engine: 'terragrunt', summary: null, output: relative, planPath: null, hasChanges: false, destroys: 0, targets: [], policy: null, mocks: ['live/prod/vpc'], providers: [], usage: null, applied: null } as any;
+  const body = renderComment({ marker: 'M', headSha: 'abc1234', command: 'tfv', limit: 65000, projects: [{ name: 'live/prod/app', plan, blockers: [] }] });
+  assert.match(body, /⏳ waiting for `live\/prod\/vpc`/);
+  assert.match(body, /- ⏳ \*\*`live\/prod\/app`\*\* needs `live\/prod\/vpc` applied first:\n  ```\n  tfv apply -p live\/prod\/vpc\n  ```/);
+  assert.match(body, /\*\*Waiting for `live\/prod\/vpc`\*\*, which isn't applied yet and has no outputs, and this unit has no `mock_outputs`/);
+});

@@ -37,8 +37,11 @@ export interface Run {
   prAuthor: string;           // who opened the PR
   dir: string;                // project folder in the repo
   policy: string | null;      // JSON PolicyResult: mode and findings
-  mocks: string[];            // dependencies whose mock outputs this plan used
+  mocks: string[];            // dependencies whose mock outputs this plan used; for a failed plan,
+                              // dependencies it couldn't read (not applied yet, no mock_outputs)
   providers: string[];        // e.g. "hashicorp/aws 5.70.0"
+  usage: { cpuSeconds: number; peakMemory: number; peakProcesses: number } | null;
+  applied: { added: number; changed: number; destroyed: number } | null;
 }
 
 export interface RunQuery {
@@ -145,6 +148,8 @@ const toRun = (r: Record<string, any>): Run => ({
   policy: r.policy ?? null,
   mocks: r.mocks ? JSON.parse(r.mocks) : [],
   providers: r.providers ? JSON.parse(r.providers) : [],
+  usage: r.usage ? JSON.parse(r.usage) : null,
+  applied: r.applied ? JSON.parse(r.applied) : null,
 });
 
 const toLock = (r: Record<string, any>): Lock => ({
@@ -169,6 +174,11 @@ export class Store {
     if (!cols.includes('policy')) this.db.exec('ALTER TABLE runs ADD COLUMN policy TEXT');
     if (!cols.includes('mocks')) this.db.exec('ALTER TABLE runs ADD COLUMN mocks TEXT');
     if (!cols.includes('providers')) this.db.exec('ALTER TABLE runs ADD COLUMN providers TEXT');
+    if (!cols.includes('usage')) this.db.exec('ALTER TABLE runs ADD COLUMN usage TEXT');
+    if (!cols.includes('applied')) this.db.exec('ALTER TABLE runs ADD COLUMN applied TEXT');
+    // The Metrics page reads runs by start time.
+    this.db.exec('CREATE INDEX IF NOT EXISTS runs_started ON runs (started_at)');
+    this.db.exec('CREATE INDEX IF NOT EXISTS audit_at ON audit (at)');
   }
 
   close() { this.db.close(); }
@@ -220,10 +230,10 @@ export class Store {
     return Number(res.lastInsertRowid);
   }
 
-  finishRun(id: number, r: { status: RunStatus; engine?: string; summary?: string | null; output: string; planPath?: string | null; hasChanges?: boolean; destroys?: number; policy?: string | null; mocks?: string[]; providers?: string[] }): void {
+  finishRun(id: number, r: { status: RunStatus; engine?: string; summary?: string | null; output: string; planPath?: string | null; hasChanges?: boolean; destroys?: number; policy?: string | null; mocks?: string[]; providers?: string[]; usage?: object | null; applied?: object | null }): void {
     this.db.prepare(
-      'UPDATE runs SET status = ?, finished_at = ?, engine = ?, summary = ?, output = ?, plan_path = ?, has_changes = ?, destroys = ?, policy = ?, mocks = ?, providers = ? WHERE id = ?',
-    ).run(r.status, now(), r.engine ?? '', r.summary ?? null, r.output, r.planPath ?? null, r.hasChanges ? 1 : 0, r.destroys ?? 0, r.policy ?? null, r.mocks?.length ? JSON.stringify(r.mocks) : null, r.providers?.length ? JSON.stringify(r.providers) : null, id);
+      'UPDATE runs SET status = ?, finished_at = ?, engine = ?, summary = ?, output = ?, plan_path = ?, has_changes = ?, destroys = ?, policy = ?, mocks = ?, providers = ?, usage = ?, applied = ? WHERE id = ?',
+    ).run(r.status, now(), r.engine ?? '', r.summary ?? null, r.output, r.planPath ?? null, r.hasChanges ? 1 : 0, r.destroys ?? 0, r.policy ?? null, r.mocks?.length ? JSON.stringify(r.mocks) : null, r.providers?.length ? JSON.stringify(r.providers) : null, r.usage ? JSON.stringify(r.usage) : null, r.applied ? JSON.stringify(r.applied) : null, id);
   }
 
   saveFindings(run: Run, mode: string, findings: { rule: string; severity: string; address: string; message: string }[]): void {
@@ -270,8 +280,75 @@ export class Store {
   }
 
   // Plans are discarded on unlock; runs stay for history.
-  discardPlans(repo: string, pr: number): void {
+  discardPlans(repo: string, pr: number, project?: string): void {
+    if (project) {
+      this.db.prepare(`UPDATE runs SET plan_path = NULL WHERE repo = ? AND pr = ? AND kind = 'plan' AND project = ?`).run(repo, pr, project);
+      return;
+    }
     this.db.prepare(`UPDATE runs SET plan_path = NULL WHERE repo = ? AND pr = ? AND kind = 'plan'`).run(repo, pr);
+  }
+
+  // Everything the Metrics page shows, for runs started at or after `from`.
+  stats(from: string, to = '9999-12-31T00:00:00.000Z') {
+    const all = <T>(sql: string, ...args: (string | number)[]) => this.db.prepare(sql).all(...args) as T[];
+    const secs = `(julianday(finished_at) - julianday(started_at)) * 86400`;
+    const daily = all<{ day: string; kind: string; status: string; n: number }>(
+      `SELECT substr(started_at, 1, 10) AS day, kind, status, count(*) AS n FROM runs WHERE started_at >= ? AND started_at < ? GROUP BY day, kind, status ORDER BY day`, from, to);
+    const durations = all<{ kind: string; s: number }>(
+      `SELECT kind, ${secs} AS s FROM runs WHERE started_at >= ? AND started_at < ? AND finished_at IS NOT NULL AND status != 'running' ORDER BY s`, from, to);
+    const pct = (xs: number[], p: number) => (xs.length ? xs[Math.min(xs.length - 1, Math.floor((xs.length - 1) * p))] : null);
+    const timing = (kind: string) => {
+      const xs = durations.filter(d => d.kind === kind).map(d => d.s);
+      return { count: xs.length, p50: pct(xs, 0.5), p95: pct(xs, 0.95), max: xs.at(-1) ?? null };
+    };
+    const projects = all<{ project: string; repo: string; runs: number; applies: number; failed: number; destroys: number }>(
+      `SELECT project, repo, count(*) AS runs, sum(kind = 'apply') AS applies, sum(status = 'failed') AS failed, sum(kind = 'plan' AND destroys > 0) AS destroys
+       FROM runs WHERE started_at >= ? AND started_at < ? GROUP BY repo, project ORDER BY runs DESC LIMIT 10`, from, to);
+    const people = all<{ user: string; runs: number; plans: number; applies: number; failed: number }>(
+      `SELECT user, count(*) AS runs, sum(kind = 'plan') AS plans, sum(kind = 'apply') AS applies, sum(status = 'failed') AS failed
+       FROM runs WHERE started_at >= ? AND started_at < ? GROUP BY user ORDER BY runs DESC LIMIT 10`, from, to);
+    const engines = all<{ engine: string; n: number }>(
+      `SELECT engine, count(*) AS n FROM runs WHERE started_at >= ? AND started_at < ? AND engine != '' GROUP BY engine ORDER BY n DESC LIMIT 8`, from, to);
+    // Resources changed by applies, saved when each apply finished.
+    const one = <T>(sql: string, ...args: (string | number)[]) => this.db.prepare(sql).get(...args) as T;
+    const sums = one<{ added: number | null; changed: number | null; destroyed: number | null }>(
+      `SELECT sum(json_extract(applied, '$.added')) AS added, sum(json_extract(applied, '$.changed')) AS changed, sum(json_extract(applied, '$.destroyed')) AS destroyed
+       FROM runs WHERE kind = 'apply' AND applied IS NOT NULL AND started_at >= ? AND started_at < ?`, from, to);
+    const resources = { added: sums.added ?? 0, changed: sums.changed ?? 0, destroyed: sums.destroyed ?? 0 };
+    // Resource usage of runs: percentiles, and the heaviest runs.
+    const mem = all<{ v: number }>(`SELECT json_extract(usage, '$.peakMemory') AS v FROM runs WHERE usage IS NOT NULL AND json_extract(usage, '$.quick') IS NULL AND started_at >= ? AND started_at < ? ORDER BY v`, from, to).map(x => x.v);
+    const cpu = all<{ v: number }>(`SELECT json_extract(usage, '$.cpuSeconds') AS v FROM runs WHERE usage IS NOT NULL AND json_extract(usage, '$.quick') IS NULL AND started_at >= ? AND started_at < ? ORDER BY v`, from, to).map(x => x.v);
+    const heaviest = all<{ id: number; repo: string; pr: number; project: string; kind: string; status: string; user: string; started_at: string; secs: number | null; usage: string }>(
+      `SELECT id, repo, pr, project, kind, status, user, started_at, ${secs} AS secs, usage FROM runs
+       WHERE usage IS NOT NULL AND json_extract(usage, '$.quick') IS NULL AND started_at >= ? AND started_at < ? ORDER BY json_extract(usage, '$.peakMemory') DESC LIMIT 10`, from, to)
+      .map(r => ({ id: r.id, repo: r.repo, pr: r.pr, project: r.project, kind: r.kind, status: r.status, user: r.user, startedAt: r.started_at, seconds: r.secs, usage: JSON.parse(r.usage) }));
+    const usage = {
+      runs: mem.length,
+      memory: { p50: pct(mem, 0.5), p95: pct(mem, 0.95), max: mem.at(-1) ?? null },
+      cpu: { p50: pct(cpu, 0.5), p95: pct(cpu, 0.95), max: cpu.at(-1) ?? null, total: Math.round(cpu.reduce((a, b) => a + b, 0)) },
+      heaviest,
+    };
+    const totals = one<{ runs: number; plans: number; applies: number; failed: number; prs: number; users: number; projects: number; repos: number; destroying: number }>(
+      `SELECT count(*) AS runs, sum(kind = 'plan') AS plans, sum(kind = 'apply') AS applies, sum(status = 'failed') AS failed,
+        count(DISTINCT repo || '#' || pr) AS prs, count(DISTINCT user) AS users, count(DISTINCT repo || '/' || project) AS projects,
+        count(DISTINCT repo) AS repos, sum(kind = 'plan' AND destroys > 0) AS destroying
+       FROM runs WHERE started_at >= ? AND started_at < ?`, from, to);
+    return {
+      from,
+      totals: Object.fromEntries(Object.entries(totals).map(([k, v]) => [k, v ?? 0])),
+      daily, timing: { plan: timing('plan'), apply: timing('apply') },
+      projects, people, engines, resources, usage,
+      policy: {
+        bySeverity: all<{ severity: string; n: number }>(`SELECT severity, count(*) AS n FROM policy_findings WHERE at >= ? AND at < ? GROUP BY severity`, from, to),
+        topRules: all<{ rule: string; n: number; enforced: number }>(`SELECT rule, count(*) AS n, sum(mode = 'enforce') AS enforced FROM policy_findings WHERE at >= ? AND at < ? GROUP BY rule ORDER BY n DESC LIMIT 8`, from, to),
+      },
+      decisions: {
+        total: one<{ n: number }>(`SELECT count(*) AS n FROM audit WHERE at >= ? AND at < ?`, from, to).n,
+        denied: all<{ action: string; n: number }>(`SELECT action, count(*) AS n FROM audit WHERE at >= ? AND at < ? AND allowed = 0 GROUP BY action ORDER BY n DESC LIMIT 8`, from, to),
+      },
+      drift: all<{ status: string; n: number }>(`SELECT status, count(*) AS n FROM drift_runs WHERE at >= ? AND at < ? GROUP BY status`, from, to),
+      locks: one<{ n: number; oldest: string | null }>(`SELECT count(*) AS n, min(created_at) AS oldest FROM locks`),
+    };
   }
 
   // Newest successful apply of a project from any PR.

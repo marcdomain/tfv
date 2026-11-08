@@ -12,7 +12,7 @@ const noChange = summarizePlan(JSON.parse(fixture('plan-nochange.json')));
 const run = (over: Partial<Run>): Run => ({
   id: 1, repo: 'github.com/acme/infra', pr: 7, project: 'envs/prod', workspace: 'default', kind: 'plan',
   status: 'success', headSha: 'abc1234def', user: 'bob', startedAt: '', finishedAt: '', engine: 'terraform 1.9.8',
-  summary: JSON.stringify(changes), output: fixture('plan-changes.txt'), planPath: '/x', hasChanges: true, destroys: 2, targets: [], prAuthor: 'bob', dir: 'envs/prod', policy: null, mocks: [], providers: [], ...over,
+  summary: JSON.stringify(changes), output: fixture('plan-changes.txt'), planPath: '/x', hasChanges: true, destroys: 2, targets: [], prAuthor: 'bob', dir: 'envs/prod', policy: null, mocks: [], providers: [], usage: null, applied: null, ...over,
 });
 
 test('summarizes a real terraform plan', () => {
@@ -49,7 +49,8 @@ test('comment: caution banner, table, details, footer', () => {
   assert.ok(body.startsWith('<!-- tfv:summary -->'));
   assert.match(body, /### 🔴 tfv · 4 projects · `abc1234`/);
   assert.match(body, /> \[!CAUTION\]\n> \*\*2 resources will be destroyed or replaced\*\*/);
-  assert.match(body, /`terraform_data\.database` \(replace: triggers_replace forces replacement\)/);
+  assert.match(body, /> \[!CAUTION\]\n> \*\*2 resources will be destroyed or replaced\*\*\n> - `envs\/prod`: 1 to destroy · 1 to replace\n/);
+  assert.doesNotMatch(body.split('| Project |')[0], /terraform_data\.legacy_queue/, 'resources are listed once, in the project section');
   assert.match(body, /\| `envs\/prod` \| terraform 1\.9\.8 \| ⚠️ \*\*\+3 ~1 ±1 −1\*\* \| 🔒 1 more approval from team:platform-admins \|/);
   assert.match(body, /\| `envs\/dev` \| terraform 1\.9\.8 \| ✅ no changes \| — \|/);
   assert.match(body, /\| `envs\/stg` \| terraform 1\.9\.8 \| ❌ failed \|/);
@@ -93,15 +94,16 @@ test('output helpers', () => {
   assert.match(tail('line1\nline2\nline3', 8), /omitted\)\nline3$/);
 });
 
-test('each project body is indented under its project (blockquote), output nested inside', () => {
+test('each project body is indented under its project (blockquote), output shown inside without another dropdown', () => {
   const body = renderComment({ marker: 'M', headSha: 'abc1234', command: 'tfv', limit: 65000, projects: [{ name: 'infra/dev', plan: run({ project: 'infra/dev' }) }] });
   const section = body.slice(body.indexOf('<details><summary><b>infra/dev</b>'));
   assert.match(section, /^<details><summary><b>infra\/dev<\/b> — [^<]+<\/summary>\n<blockquote>\n\n/);
   const open = section.indexOf('<blockquote>');
-  const output = section.indexOf('<details><summary>Output</summary>');
+  const output = section.indexOf('**Output**\n\n```diff');
+  assert.doesNotMatch(section, /<summary>Output<\/summary>/, 'no second dropdown');
   const close = section.indexOf('</blockquote>');
   assert.ok(open < output && output < close, 'Output sits inside the indented block');
-  assert.match(section, /<\/details>\n\n<\/blockquote>\n<\/details>/);
+  assert.match(section, /```\n\n<\/blockquote>\n<\/details>/, 'the output ends the section');
 });
 
 test('"apply all ready projects" only shows where the server allows it', () => {
@@ -116,8 +118,9 @@ test('"apply all ready projects" only shows where the server allows it', () => {
 
 test('commands are in code blocks (GitHub adds a copy button)', () => {
   const body = renderComment({ marker: 'M', headSha: 'abc1234', command: 'tfv', limit: 65000, projects: [{ name: 'infra/dev', plan: run({ project: 'infra/dev', destroys: 0 }), blockers: [], checkUrl: 'https://github.com/x/runs/1' }] });
-  assert.match(body, /- 🟢 \*\*`infra\/dev`\*\* is ready\. Comment this, or \[\*\*▶ Apply\*\*\]\(https:\/\/github\.com\/x\/runs\/1\):\n  ```\n  tfv apply -p infra\/dev\n  ```/);
   assert.match(body, /\*\*To apply:\*\* comment this, or \[\*\*▶ Apply\*\*\]\([^)]+\):\n```\ntfv apply -p infra\/dev\n```/);
+  assert.doesNotMatch(body, /is ready to apply/, 'the table and section already say so');
+  assert.equal(body.split('tfv apply -p infra/dev').length - 1, 1, 'the command is shown once, in the project section');
 });
 
 test('apply report: real result, past tense, outputs, apply log only', async () => {
@@ -199,4 +202,14 @@ test('providers: exact versions from the lock file, shown in the plan and apply 
   const report = renderApplyReport({ marker: 'M', headSha: 'abc1234', command: 'tfv', limit: 65000, applies: [{ name: 'infra/dev', apply, plan: run({ providers: ['hashicorp/terraform 1.9.8'] }) }] });
   assert.match(report, /\| Project \| Engine \| Providers \| Result \| Resources \| Took \|/);
   assert.match(report, /\| terraform 1\.9\.8 \| terraform 1\.9\.8 \| ✅ applied \| 0 added · 0 changed · 2 destroyed \|/);
+});
+
+test('output changes are listed only when the full output does not fit', () => {
+  const p = { name: 'envs/prod', plan: run({}), blockers: [] };
+  const fits = renderComment({ marker: 'M', headSha: 'abc1234', command: 'tfv', limit: 65000, projects: [p] });
+  assert.doesNotMatch(fits, /\*\*Outputs:\*\*/, 'the full output already shows them');
+  assert.match(fits, /\*\*Output\*\*/);
+  const cut = renderComment({ marker: 'M', headSha: 'abc1234', command: 'tfv', limit: 1300, projects: [p] });
+  assert.match(cut, /\*\*Outputs:\*\* `/);
+  assert.match(cut, /Output too long for a comment/);
 });

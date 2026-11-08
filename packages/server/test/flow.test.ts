@@ -36,6 +36,13 @@ if (cmd === 'plan') {
   process.stdout.write(fs.readFileSync(path.join(F, noop ? 'plan-nochange.txt' : 'plan-changes.txt')));
   process.exit(noop ? 0 : 2);
 }
+if (cmd === 'state' && rest[0] === 'list') { console.log('terraform_data.app\\nterraform_data.cache'); process.exit(0); }
+if (cmd === 'state' && rest[0] === 'show') { console.log('# ' + rest[1] + ':\\nresource "terraform_data" "app" {}'); process.exit(0); }
+if (cmd === 'state' && rest[0] === 'rm') { console.log('Removed ' + rest[1] + '\\nSuccessfully removed 1 resource instance(s).'); process.exit(0); }
+if (cmd === 'import') { console.log('ARGS ' + rest.join(' ') + '\\nImport successful!'); process.exit(0); }
+if (cmd === 'output') { console.log('\\u001b[1mapp\\u001b[0m = "demo"'); process.exit(0); }
+if (cmd === 'fmt') { console.log('main.tf\\n--- old/main.tf\\n+++ new/main.tf'); process.exit(3); }
+if (cmd === 'show' && rest.length === 1) { console.log('# terraform_data.app:'); process.exit(0); }
 if (cmd === 'show') {
   const plan = fs.readFileSync(rest[rest.length - 1], 'utf-8');
   process.stdout.write(fs.readFileSync(path.join(F, plan === 'noop' ? 'plan-nochange.json' : 'plan-changes.json')));
@@ -184,7 +191,7 @@ test('3. stale approvals do not count; fresh ones do', async () => {
   assert.doesNotMatch(applies[0].output, /LEAK/); // server secrets stripped from terraform's env
   assert.match(gh.sticky.get(1)!, /\| \[`envs\/dev`\]\([^)]+\) \|.*\| ✅ applied \|/);
   assert.match(gh.sticky.get(1)!, /\*\*Approved by\*\* <img src="https:\/\/github\.com\/carol\.png\?size=36"[^>]*> \[carol\]\(https:\/\/github\.com\/carol\)/);
-  assert.match(gh.sticky.get(1)!, /- 🟢 \*\*`envs\/prod`\*\* is ready\. Comment this[^\n]*:\n  ```\n  tfv apply -p envs\/prod\n  ```/);
+  assert.match(gh.sticky.get(1)!, /\*\*To apply:\*\*[^\n]*:\n```\ntfv apply -p envs\/prod\n```/);
 });
 
 test('4. Apply button on prod: a platform-admin applies after a team approval', async () => {
@@ -298,7 +305,7 @@ test('11. defaults: ⏳ reply at once, then a NEW comment per plan with apply co
   assert.doesNotMatch(first, /spinner\.gif/, 'the spinning reply was turned into the report');
   assert.match(first, /\| Project \| Engine \| Providers \| Plan \| Apply \| By \|/);
   assert.match(first, /\*\*To apply:\*\* comment this, or \[\*\*▶ Apply\*\*\]\(https:\/\/github\.test\/runs\/tfv%3A%20envs%2Fdev\):\n```\ntfv apply -p envs\/dev\n```/);
-  assert.match(first, /- 🟢 \*\*`envs\/prod`\*\* is ready\. Comment this, or \[\*\*▶ Apply\*\*\]\([^)]+\):\n  ```\n  tfv apply -p envs\/prod\n  ```/);
+  assert.doesNotMatch(first, /is ready to apply/);
 
   // While a command runs, its reply says so; afterwards it holds that command's report.
   let during = '';
@@ -365,7 +372,7 @@ test('15. policy checks (enforce + override) and the two-person rule', async () 
   assert.match(body, /🛡️ 2 policy findings/);
   assert.match(body, /🛡️ \*\*Policy \(enforced: blocks apply\):\*\* 2 findings/);
   assert.match(body, /🔴 \*\*no-prod-destroy\*\* · `terraform_data\.database` · needs a security override/);
-  assert.match(body, /\*\*To apply \(someone other than alice\):\*\* first 2 policy findings \(no-prod-destroy\)\. Then comment:\n```\ntfv apply -p envs\/prod\n```/);
+  assert.match(body, /\*\*To apply \(someone other than alice\):\*\* first 2 policy findings \(no-prod-destroy\)[^\n]*\. Then comment:\n```\ntfv apply -p envs\/prod\n```/);
 
   const say = async (user: string, text: string) => {
     await strict.handle(gh, { kind: 'comment', repo, prNumber: 30, commentId: String(Math.random()), author: user, body: text });
@@ -425,4 +432,52 @@ test('someone edits or deletes a tfv comment: left as is; warning links to it wi
   const before = gh.comments.length;
   await app.handle(gh, { kind: 'bot_comment_changed', repo, prNumber: 1, commentId: 'not-ours', by: 'x', change: 'edited', body: '' });
   assert.equal(gh.comments.length, before);
+});
+
+test('Terraform commands: read ones for planners; state changes need permission, take the lock, audit and re-plan', async () => {
+  const last = () => gh.comments.at(-1)!.body;
+  const all = (from: number) => gh.comments.slice(from).map(c => c.body).join('\n---\n');
+  for (let pr = 1; pr <= 99; pr++) if (pr !== 1) store.releasePrLocks('github.com/acme/infra', pr);
+  await comment(1, 'bob', 'tfv state list -p envs/dev');
+  assert.match(last(), /✅ `tfv state list -p envs\/dev`[\s\S]*```\n\$ terraform state list\nterraform_data\.app\nterraform_data\.cache\n```/);
+  await comment(1, 'bob', 'tfv output -p envs/dev');
+  assert.match(last(), /app = "demo"/);
+  assert.doesNotMatch(last(), /\u001b/, 'colour codes are removed');
+  await comment(1, 'bob', 'tfv fmt -p envs/dev');
+  assert.match(last(), /📝 `tfv fmt -p envs\/dev`\n\nSome files need `terraform fmt`/);
+
+  // bob has write access: enough to import, not to remove from state.
+  await comment(1, 'bob', 'tfv state rm -p envs/dev terraform_data.app');
+  assert.match(last(), /🚫 `tfv state rm -p envs\/dev terraform_data\.app`: state_rm on `envs\/dev` needs maintain/);
+  // Editing the state directly needs the project's approvals, like an apply.
+  gh.reviewsByPr.set(1, []);
+  await comment(1, 'bob', 'tfv import -p envs/dev terraform_data.app abc-123');
+  assert.match(last(), /🔒 `tfv import -p envs\/dev terraform_data\.app abc-123` needs 1 more approval from write/);
+  gh.reviewsByPr.set(1, [{ user: 'carol', state: 'approved', commitSha: head }]);
+  let from = gh.comments.length;
+  await comment(1, 'bob', 'tfv import -p envs/dev terraform_data.app abc-123');
+  assert.match(all(from), /✅ `tfv import -p envs\/dev terraform_data\.app abc-123`[\s\S]*ARGS -input=false -no-color terraform_data\.app abc-123/);
+  assert.match(all(from), /🔁 The state was edited directly, so `envs\/dev` is planned again/);
+
+  // erin has maintain: state rm is allowed.
+  from = gh.comments.length;
+  await comment(1, 'erin', 'tfv state rm -p envs/dev terraform_data.app');
+  assert.match(all(from), /✅ `tfv state rm -p envs\/dev terraform_data\.app`[\s\S]*Successfully removed 1 resource/);
+
+  const audit = store.searchAudit({}).items.filter(a => a.project === 'envs/dev').map(a => `${a.action}:${a.allowed}`);
+  assert.ok(audit.includes('import:true') && audit.includes('state rm:true') && audit.includes('state_rm:false') && audit.includes('import:false'));
+});
+
+test('unlocking from the dashboard tells the PR and drops that plan', async () => {
+  await comment(1, 'bob', 'tfv plan -p envs/dev');
+  const before = gh.comments.length;
+  const ok = await app.dashboardUnlock(gh, { repo: 'github.com/acme/infra', pr: 1, project: 'envs/dev', workspace: 'default', user: 'bob' }, { name: 'Ada Admin', via: 'okta' });
+  assert.equal(ok, true);
+  const msg = gh.comments.at(-1)!;
+  assert.equal(gh.comments.length, before + 1);
+  assert.equal(msg.pr, 1);
+  assert.match(msg.body, /🔓 \*\*`envs\/dev` was unlocked from the tfv dashboard\*\* by Ada Admin \(okta\)/);
+  assert.match(msg.body, /```\ntfv plan -p envs\/dev\n```/);
+  const plan = store.latestRuns('github.com/acme/infra', 1, 'plan').find(r => r.project === 'envs/dev')!;
+  assert.equal(plan.planPath, null, 'the plan made under the lock is gone');
 });

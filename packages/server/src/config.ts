@@ -12,8 +12,13 @@ import { validatePolicies, type PolicyConfig } from './policies.ts';
 export type Requirement = 'approved' | 'mergeable' | 'undiverged';
 export const REQUIREMENTS: Requirement[] = ['approved', 'mergeable', 'undiverged'];
 
-export type Action = 'plan' | 'apply' | 'apply_destroy' | 'unlock';
-export const ACTIONS: Action[] = ['plan', 'apply', 'apply_destroy', 'unlock'];
+// One key per Terraform command, so a project can single out a command ("everything but force-unlock").
+export type CommandAction = 'state_list' | 'state_show' | 'show' | 'output' | 'validate' | 'providers' | 'fmt'
+  | 'import' | 'taint' | 'untaint' | 'state_rm' | 'state_mv' | 'force_unlock';
+export const COMMAND_ACTIONS: CommandAction[] = ['state_list', 'state_show', 'show', 'output', 'validate', 'providers', 'fmt',
+  'import', 'taint', 'untaint', 'state_rm', 'state_mv', 'force_unlock'];
+export type Action = 'plan' | 'apply' | 'apply_destroy' | 'unlock' | 'state_read' | 'state_write' | 'state_remove' | CommandAction;
+export const ACTIONS: Action[] = ['plan', 'apply', 'apply_destroy', 'unlock', 'state_read', 'state_write', 'state_remove', ...COMMAND_ACTIONS];
 
 // Principal strings: "write" (minimum repo permission), "team:platform" or
 // "team:org/platform", "user:alice", "codeowners", "anyone".
@@ -42,6 +47,7 @@ export interface RepoPolicy {
   allow_repo_schedules?: boolean;             // drift schedules from tfv.yaml (default true)
   require_apply_project?: boolean;            // refuse a bare `tfv apply`; one project at a time
   allow_targets?: boolean;                    // `tfv plan -t <address>` (default true)
+  allow_state_changes?: boolean;              // direct state edits: import, taint, state rm/mv, force-unlock (default true)
   ack_reaction?: Ack;                         // reaction on a command tfv picked up (default: server setting)
   progress_reply?: boolean;                   // spinning "Running…" reply under the command (default: server setting)
   two_person_rule?: boolean;                  // the PR author may not apply (any project in the repo)

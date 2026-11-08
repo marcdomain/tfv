@@ -115,7 +115,7 @@ export const tail = (text: string, max: number): string => {
 };
 
 // Keeps fenced blocks intact even if output contains backticks.
-const fence = (text: string, lang = '') => {
+export const fence = (text: string, lang = '') => {
   const ticks = '`'.repeat(Math.max(3, ...[...text.matchAll(/`+/g)].map(m => m[0].length + 1)));
   return `${ticks}${lang}\n${text}\n${ticks}`;
 };
@@ -131,8 +131,11 @@ export const colorize = (text: string): string => text.split('\n').map(line => {
   return `!${indent}${marker}${gap}${rest}`;
 }).join('\n');
 
+// Destroys and replacements first: they're what reviewers must not miss.
+const ORDER: Record<ChangeAction, number> = { delete: 0, replace: 1, update: 2, create: 3, import: 4, move: 5, forget: 6 };
+
 export const changeList = (s: PlanSummary, max = 200): string => {
-  const lines = s.changes.slice(0, max).map(c => `${SYMBOL[c.action].padEnd(3)} ${c.address}${c.reason ? `   # ${c.reason}` : ''}`);
+  const lines = [...s.changes].sort((a, b) => ORDER[a.action] - ORDER[b.action]).slice(0, max).map(c => `${SYMBOL[c.action].padEnd(3)} ${c.address}${c.reason ? `   # ${c.reason}` : ''}`);
   if (s.changes.length > max) lines.push(`… and ${s.changes.length - max} more`);
   return fence(colorize(lines.join('\n')), 'diff');
 };
@@ -195,7 +198,7 @@ const planCell = (v: ProjectView): string => {
   const p = v.plan;
   if (!p) return v.note ? `⚠️ ${v.note}` : '—';
   if (p.status === 'running' || p.status === 'queued') return '⏳ planning…';
-  if (p.status === 'failed') return '❌ failed';
+  if (p.status === 'failed') return p.mocks?.length ? `⏳ waiting for ${p.mocks.map(m => `\`${m}\``).join(', ')}` : '❌ failed';
   const s = parse(p);
   if (!s || s.noChanges) return '✅ no changes';
   const parts = [s.add && `+${s.add}`, s.change && `~${s.change}`, s.replace && `±${s.replace}`, s.destroy && `−${s.destroy}`].filter(Boolean);
@@ -263,10 +266,16 @@ export const renderComment = (input: CommentInput): string => {
   if (stats.length) head.push(`<sub>${stats.join(' · ')}</sub>`);
   if (dangerous.length) {
     head.push('', '> [!CAUTION]', `> **${dangerous.length} resource${dangerous.length === 1 ? '' : 's'} will be destroyed or replaced**`);
-    for (const { project, c } of dangerous.slice(0, 15)) {
-      head.push(`> - \`${project}\`: \`${c.address}\` (${c.action}${c.reason ? `: ${c.reason}` : ''})`);
+    // Counts only: the resources are listed once, in each project's section below.
+    const perProject = new Map<string, { delete: number; replace: number }>();
+    for (const { project, c } of dangerous) {
+      const n = perProject.get(project) ?? { delete: 0, replace: 0 };
+      if (c.action === 'replace') n.replace++; else n.delete++;
+      perProject.set(project, n);
     }
-    if (dangerous.length > 15) head.push(`> - … and ${dangerous.length - 15} more`);
+    for (const [project, n] of perProject) {
+      head.push(`> - \`${project}\`: ${[n.delete && `${n.delete} to destroy`, n.replace && `${n.replace} to replace`].filter(Boolean).join(' · ')}`);
+    }
   }
   for (const w of input.warnings ?? []) head.push('', `> [!WARNING]\n> ${w}`);
 
@@ -282,18 +291,19 @@ export const renderComment = (input: CommentInput): string => {
     head.push('', `**Approved by** ${input.approvers.map(a => personMd(a, links)).join(' · ')}`);
   }
 
-  // What to do next, per project. Commands sit in code blocks, which GitHub
-  // gives a copy button; indented so they stay inside their list item.
+  // What needs attention. Ready projects aren't repeated here: the table shows them,
+  // with ▶ Apply, and each project's section has its apply command.
   const steps: string[] = [];
-  for (const v of ready) {
-    steps.push(`- 🟢 **\`${v.name}\`** is ready. Comment this${v.checkUrl ? `, or [**▶ Apply**](${v.checkUrl})` : ''}:`, ...listCmd(`${command} apply -p ${v.name}`));
-  }
   // Only where this server lets one command apply several projects.
   if (ready.length > 1 && !input.oneProjectPerApply) {
     steps.push(`- Or apply ${ready.length === 2 ? 'both' : `all ${ready.length}`} ready projects at once:`, ...listCmd(`${command} apply`));
   }
   for (const v of waiting) steps.push(`- 🔒 **\`${v.name}\`** needs ${v.blockers!.join('; ')}`);
-  for (const v of projects.filter(x => x.plan?.status === 'failed')) {
+  for (const v of projects.filter(x => x.plan?.status === 'failed' && x.plan.mocks?.length)) {
+    const deps = v.plan!.mocks;
+    steps.push(`- ⏳ **\`${v.name}\`** needs ${deps.map(d => `\`${d}\``).join(', ')} applied first:`, ...deps.flatMap(d => listCmd(`${command} apply -p ${d}`)));
+  }
+  for (const v of projects.filter(x => x.plan?.status === 'failed' && !x.plan.mocks?.length)) {
     steps.push(`- ❌ **\`${v.name}\`** failed. Fix it and push, or plan it again:`, ...listCmd(`${command} plan -p ${v.name}`));
   }
   if (steps.length) head.push('', '**Next steps**', ...steps);
@@ -313,7 +323,10 @@ export const renderComment = (input: CommentInput): string => {
     const title = v.plan?.status === 'failed' ? 'plan failed' : s ? countsText(s) : (v.note ?? 'not planned');
     // The body sits in a blockquote so it renders indented under the project.
     lines.push('', `<details${v.plan?.status === 'failed' ? ' open' : ''}><summary><b>${v.name}</b> — ${title}</summary>`, '<blockquote>', '');
-    if (v.plan?.mocks?.length) {
+    if (v.plan?.status === 'failed' && v.plan.mocks?.length) {
+      const n = v.plan.mocks.length;
+      lines.push(`> [!IMPORTANT]\n> **Waiting for ${v.plan.mocks.map(m => `\`${m}\``).join(', ')}**, which ${n === 1 ? "isn't" : "aren't"} applied yet and ${n === 1 ? 'has' : 'have'} no outputs, and this unit has no \`mock_outputs\` to plan with. Apply ${n === 1 ? 'it' : 'them'} first; tfv then plans this unit again with the real outputs.`, '');
+    } else if (v.plan?.mocks?.length) {
       lines.push(`> [!WARNING]\n> **Planned with mock outputs** from ${v.plan.mocks.map(m => `\`${m}\``).join(', ')}, which ${v.plan.mocks.length === 1 ? "isn't" : "aren't"} applied yet. This plan can't be applied: apply ${v.plan.mocks.length === 1 ? 'it' : 'them'} first, and tfv re-plans this project with the real outputs.`, '');
     }
     const pol = policyOf(v.plan);
@@ -343,10 +356,9 @@ export const renderComment = (input: CommentInput): string => {
     if (s && s.drift.length) {
       lines.push('', `**Drift** (changed outside of Terraform): ${s.drift.slice(0, 20).map(d => `\`${d.address}\` ${d.action}`).join(', ')}`);
     }
-    if (s && s.outputs.length) {
-      lines.push('', `**Outputs:** ${s.outputs.map(o => `\`${o.name}\` ${o.action}`).join(', ')}`);
-    }
-    return { v, text: lines.join('\n') };
+    // Output changes, for when the full output (which lists them) doesn't fit.
+    const outputsLine = s && s.outputs.length ? `**Outputs:** ${s.outputs.map(o => `\`${o.name}\` ${o.action}`).join(', ')}` : '';
+    return { v, text: lines.join('\n'), outputsLine };
   });
 
   const outputs = projects.map(v => {
@@ -358,7 +370,7 @@ export const renderComment = (input: CommentInput): string => {
   });
 
   const fixed = [head.join('\n'), ...sections.map(s => `${s.text}\n\n</blockquote>\n</details>`), footer.join('\n')].join('\n').length;
-  const wrapper = '\n\n<details><summary>Output</summary>\n\n```\n\n```\n</details>\n</blockquote>\n'.length + 60;
+  const wrapper = '\n\n**Output**\n\n```diff\n\n```\n</blockquote>\n'.length + 60;
   const withOutput = outputs.filter(Boolean).length;
   const budget = withOutput ? Math.floor((input.limit - fixed - withOutput * wrapper - 200) / withOutput) : 0;
 
@@ -367,10 +379,14 @@ export const renderComment = (input: CommentInput): string => {
     body.push(s.text);
     if (outputs[i]) {
       if (budget >= 300) {
-        body.push('', '<details><summary>Output</summary>', '', fence(colorize(tail(outputs[i], budget)), 'diff'), '</details>');
+        // Shown in full once the project is opened: no second dropdown.
+        body.push('', '**Output**', '', fence(colorize(tail(outputs[i], budget)), 'diff'));
       } else {
+        if (s.outputsLine) body.push('', s.outputsLine);
         body.push('', `_Output too long for a comment; see the check run${input.dashboardUrl ? ' or dashboard' : ''}._`);
       }
+    } else if (s.outputsLine) {
+      body.push('', s.outputsLine);
     }
     body.push('', '</blockquote>', '</details>');
   });
@@ -468,7 +484,7 @@ export const renderApplyReport = (input: {
     }
     const outputs = ok ? parseApplyOutputs(v.apply.output) : null;
     if (outputs) lines.push('**Outputs:**', fence(tail(outputs, 4000)), '');
-    lines.push(`<details${ok ? '' : ' open'}><summary>${ok ? 'Apply log' : 'Error'}</summary>`, '', fence(tail(applyLog(v.apply.output), Math.max(2000, Math.floor((input.limit - 4000) / Math.max(1, applies.length))))), '</details>');
+    lines.push(`**${ok ? 'Apply log' : 'Error'}**`, '', fence(tail(applyLog(v.apply.output), Math.max(2000, Math.floor((input.limit - 4000) / Math.max(1, applies.length))))));
     lines.push('', '</blockquote>', '</details>');
     return lines.join('\n');
   });

@@ -103,7 +103,10 @@ repos:
     - id: github.com/acme/infra
       projects:
         - match: prod/**
-          permissions: { apply: [team:platform-admins], apply_destroy: [admin] }
+          permissions:
+            apply: [team:platform-admins]
+            apply_destroy: [admin]       # also covers state rm / state mv / force-unlock
+            force_unlock: []             # single commands can be set too; [] = nobody
           approvals: [{ from: team:platform-admins, count: 2 }]
       drift:
         - { name: prod-nightly, projects: ["prod/**"], schedule: "0 6 * * 1-5", timezone: Europe/Berlin, notify: [infra-alerts] }
@@ -111,8 +114,9 @@ extraEnvFrom:
   - secretRef: { name: tfv-chat-tokens }   # holds TFV_SLACK_TOKEN
 ```
 
-Policy checks and the two-person rule go in the same `repos` value; see the
-[server README](../../packages/server/README.md#policy-checks).
+Policy checks, the two-person rule and permissions for Terraform commands (`state rm`,
+`import`, …) go in the same `repos` value; see the
+[server README](../../packages/server/README.md#rules-reposyaml).
 
 ## How it runs
 

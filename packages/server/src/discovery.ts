@@ -245,6 +245,20 @@ export const mockedDependencies = (unitDir: string, deps: TgDependency[], output
   return [...hit];
 };
 
+// Dependencies a failed Terragrunt plan needed but couldn't read: not applied yet, and
+// the unit has no mock_outputs. Terragrunt prints the path relative to the unit
+// ("../vpc"), or relative to the checkout once tfv tidies absolute paths ("./live/prod/vpc").
+export const unappliedDependencies = (unitDir: string, deps: TgDependency[], output: string): string[] => {
+  const hit = new Set<string>();
+  for (const m of output.matchAll(/(\S+?)\/terragrunt\.hcl is a dependency of \S+ but detected no outputs/g)) {
+    const path = m[1].replace(/^\*\s*/, '');
+    const candidates = [resolveRel(unitDir, path), posix.normalize(path).replace(/^\.\//, '')];
+    const dep = deps.find(d => candidates.includes(d.dir)) ?? deps.find(d => posix.basename(d.dir) === posix.basename(path));
+    if (dep) hit.add(dep.dir);
+  }
+  return [...hit];
+};
+
 // ---- tfv watch ---------------------------------------------------------------
 // Extra files that should replan a project, for anything the config doesn't name:
 //   # tfv:watch lambda/orders/**/*.py scripts/build.sh     (any .tf / .tofu / .hcl file)

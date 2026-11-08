@@ -28,7 +28,7 @@ Set up the GitHub App like this:
 - **Events:** pull request, issue comment, check run
 - **Permissions:** Checks (read & write), Contents (read), Issues (read & write), Pull requests
   (read & write), Members (read)
-- **Logo:** upload [`docs/tfv-logo.png`](docs/tfv-logo.png) under *Display information*.
+- **Logo:** upload [`brand/tfv-avatar.png`](../../brand/tfv-avatar.png) under *Display information*.
   Without a logo, GitHub shows the App owner's picture on tfv's comments.
 
 ## PR commands
@@ -39,11 +39,27 @@ Set up the GitHub App like this:
 | `tfv plan -p <project>` | Plan one project. `-d <dir>` and `-w <workspace>` also work |
 | `tfv plan -p <project> -t <address>` | Plan only some resources; repeat `-t` for more |
 | `tfv plan --destroy` | Plan a destroy |
+| `tfv plan -p <project> --replace <address>` | Plan replacing a resource |
+| `tfv plan -p <project> --refresh-only` | Plan updating the state to match what's deployed |
 | `tfv apply` | Apply every ready project (can be turned off, see below) |
 | `tfv apply -p <project>` | Apply one project. The Apply button does the same |
 | `tfv unlock` | Release this PR's locks and drop its plans |
 
 Apply always uses the saved plan, so what runs is exactly what was reviewed.
+
+**Terraform commands** run on one project (`-p <project>`):
+
+| Comment | Needs |
+|---|---|
+| `tfv validate`, `providers`, `fmt`, `state list [address]` | `plan` |
+| `tfv state show <address>`, `show`, `output [name]` | `state_read` |
+| `tfv import <address> <id>`, `taint <address>`, `untaint <address>` | `state_write` and approvals |
+| `tfv state rm <address>...`, `state mv <from> <to>`, `force-unlock <lock-id>` | `state_remove` and approvals |
+
+Commands that edit the state directly take the project's lock, are audited, and plan the
+project again Only these commands run, and arguments are checked, so nothing else (such as `console` or
+`-chdir`) can be passed through. Turn direct state edits off for a repo with
+`allow_state_changes: false`.
 
 ## Settings
 
@@ -78,6 +94,7 @@ repos:
         permissions:
           apply: [team:platform-admins]  # read|write|maintain|admin, team:x, user:x, codeowners, anyone
           apply_destroy: [admin]         # plans that delete or replace
+          state_read: [team:platform]    # state show, show, output (optional)
         approvals:
           - { from: team:platform-admins, count: 2 }
           - { from: team:security, count: 1 }
@@ -86,8 +103,32 @@ repos:
 ```
 
 Defaults when no rule applies:
-- `plan` and `apply` need write access.
-- Destroying plans and unlocking need maintain.
+
+| Permission | Covers | Default | Not set for a project? Uses |
+|---|---|---|---|
+| `plan` | plans, `validate`, `providers`, `fmt`, `state list` | write | |
+| `apply` | applies | write | |
+| `apply_destroy` | applies that delete or replace | maintain | |
+| `unlock` | releasing another PR's lock | maintain | |
+| `state_read` | `state show`, `show`, `output` | write | `plan` |
+| `state_write` | `import`, `taint`, `untaint` | write | `apply` |
+| `state_remove` | `state rm`, `state mv`, `force-unlock` | maintain | `apply_destroy` |
+
+The last three cover the Terraform commands. When a project doesn't set them, they use the
+rule they extend, so they're never looser: limit `apply_destroy` to admins and `state rm` is
+admin-only too. Commands that edit the state directly (outside a plan and apply) also need the
+project's approvals, like an apply.
+
+Each command also has its own key, for exceptions: `state_list`, `state_show`, `show`, `output`,
+`validate`, `providers`, `fmt`, `import`, `taint`, `untaint`, `state_rm`, `state_mv`,
+`force_unlock`. A command that isn't set uses its group; `[]` means nobody.
+
+```yaml
+permissions:
+  state_remove: [admin]   # state rm, state mv, force-unlock: admins
+  state_mv: [maintain]    # except state mv: maintainers too
+  force_unlock: []        # and nobody may force-unlock
+```
 
 Only approvals of the current commit count, and the author's own approval never counts. Each
 project needs only its own approvals.

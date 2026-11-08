@@ -6,6 +6,10 @@ import type { AddressInfo } from 'node:net';
 import { hashPassword, verifyPassword, sign, unsign, RateLimiter, Oidc, type AuthConfig } from '../src/auth.ts';
 import { createHttpServer } from '../src/http.ts';
 import { Store } from '../src/store.ts';
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
+
+const VERSION = JSON.parse(readFileSync(join(import.meta.dirname, '..', 'package.json'), 'utf-8')).version;
 
 describe('passwords and signed values', () => {
   test('scrypt hashes verify and are salted', () => {
@@ -41,6 +45,7 @@ describe('passwords and signed values', () => {
 const { privateKey, publicKey } = generateKeyPairSync('rsa', { modulusLength: 2048 });
 let idp: Server;
 let idpUrl: string;
+const unlocks: string[] = [];
 let srv: Server;
 let base: string;
 let store: Store;
@@ -95,7 +100,8 @@ before(async () => {
   };
   auth.oidc!.issuer = idpUrl;
   srv = createHttpServer({
-    app: {} as any, store, adapters: {}, auth, ready: () => true,
+    app: { dashboardUnlock: async (_a: unknown, lock: { project: string }, who: { name: string }) => { unlocks.push(`${lock.project} by ${who.name}`); return true; } } as any,
+    store, adapters: {}, auth, ready: () => true,
     oidc: new Oidc(auth.oidc!, 'http://tfv.test'), loginLimiter: new RateLimiter(5, 60_000),
   });
   await new Promise<void>(r => srv.listen(0, '127.0.0.1', () => r()));
@@ -128,7 +134,7 @@ describe('dashboard HTTP auth', () => {
     const raw = res.headers.getSetCookie()[0];
     assert.match(raw, /^tfv_session=.+; Path=\/; HttpOnly; SameSite=Lax; Max-Age=3600$/);
     const me = await (await fetch(`${base}/api/me`, { headers: { Cookie: cookieOf(res) } })).json();
-    assert.deepEqual(me, { name: 'Ada Admin', role: 'admin', via: 'password', platforms: [] });
+    assert.deepEqual(me, { name: 'Ada Admin', role: 'admin', via: 'password', platforms: [], version: VERSION });
   });
 
   test('viewers read; only admins act; cookie writes need the CSRF header', async () => {
@@ -141,7 +147,10 @@ describe('dashboard HTTP auth', () => {
     assert.equal((await fetch(`${base}/api/locks`, { headers: { Cookie: viewer } })).status, 200);
     assert.equal((await unlock(viewer)).status, 403);
     assert.equal((await unlock(admin, {})).status, 403, 'cross-site style request without the header');
-    assert.equal((await unlock(admin)).status, 200);
+    const res = await unlock(admin);
+    assert.equal(res.status, 200);
+    assert.equal((await res.json()).notified, true);
+    assert.deepEqual(unlocks, ['envs/prod by Ada Admin'], 'the PR is told');
     assert.equal(store.auditLog(1)[0].user, 'Ada Admin');
   });
 
@@ -170,7 +179,7 @@ describe('dashboard HTTP auth', () => {
     assert.equal(res.headers.get('location'), '/#overview');
     const session = res.headers.getSetCookie().find(c => c.startsWith('tfv_session='))!.split(';')[0];
     const me = await (await fetch(`${base}/api/me`, { headers: { Cookie: session } })).json();
-    assert.deepEqual(me, { name: 'Alice Okafor', role: 'admin', via: 'oidc', platforms: [] });
+    assert.deepEqual(me, { name: 'Alice Okafor', role: 'admin', via: 'oidc', platforms: [], version: VERSION });
   });
 
   test('Okta sign-in: allowed group becomes viewer; others are refused', async () => {

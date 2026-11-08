@@ -56,3 +56,13 @@ test('dependency waves: vpc first, then everything that only needs vpc, together
   const waves = app.waves([p('app', ['vpc', 'ecs']), p('vpc'), p('ecs', ['vpc']), p('dns'), p('cdn', ['dns'])]);
   assert.deepEqual(waves.map((w: any[]) => w.map(x => x.name).sort()), [['dns', 'vpc'], ['cdn', 'ecs'], ['app']]);
 });
+
+test('plans still waiting for an older commit skip themselves', () => {
+  const app = Object.create(App.prototype);
+  app.latestHead = new Map([['github.com/acme/infra#7', 'new-sha']]);
+  const ctx = (sha: string) => ({ repoKey: 'github.com/acme/infra', pr: { number: 7, headSha: sha } }) as any;
+  assert.equal(app.outdated(ctx('old-sha')), true);
+  assert.equal(app.outdated(ctx('new-sha')), false);
+  app.latestHead = new Map();
+  assert.equal(app.outdated(ctx('old-sha')), false, 'unknown: never skip');
+});

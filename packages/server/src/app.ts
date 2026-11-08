@@ -5,16 +5,16 @@ import { rmSync, mkdirSync, readFileSync, existsSync } from 'node:fs';
 import type { ServerConfig, RepoPolicy, Action } from './config.ts';
 import type { VcsAdapter, VcsEvent, Repo, PullRequestState } from './vcs/types.ts';
 import { Store, type Run } from './store.ts';
-import { parseCommand, helpText, type Command } from './commands.ts';
+import { parseCommand, helpText, toolArgs, TOOL_ACTION, EDITS_STATE, type Command } from './commands.ts';
 import { loadRepoConfig, loadRepoConfigFrom, emptyRepoConfig, type RepoConfig } from './repoConfig.ts';
-import { discoverProjects, affectedProjects, terragruntDependencies, mockedDependencies, type Project } from './discovery.ts';
+import { discoverProjects, affectedProjects, terragruntDependencies, mockedDependencies, unappliedDependencies, type Project } from './discovery.ts';
 import {
   repoPolicyFor, rulesFor, checkPermission, currentApprovers, applyBlockers, matchesPrincipal, type Lookup, type EffectiveRules,
 } from './policy.ts';
-import { renderComment, renderCheck, renderApplyReport, providersOf, cmdBlock, type ProjectView, type CommentLinks } from './render.ts';
+import { renderComment, renderCheck, renderApplyReport, parseApplyResult, providersOf, cmdBlock, fence, tail, type ProjectView, type CommentLinks } from './render.ts';
 import { repoLinks, platformForHost } from './links.ts';
 import { avatarSource } from './avatars.ts';
-import { plan as runPlan, apply as runApply, engineLabel, toolEnv, type ToolResolver, type ToolSet } from './runner.ts';
+import { plan as runPlan, apply as runApply, runTool, engineLabel, toolEnv, type ToolResolver, type ToolSet } from './runner.ts';
 import { checkout as gitCheckout } from './git.ts';
 import { log } from './log.ts';
 import { evaluateRules, runCommands, stricter, type PolicyConfig, type PolicyResult } from './policies.ts';
@@ -142,6 +142,9 @@ const sizeText = (summary: string | null): string => {
   return [x.add && `+${x.add}`, x.change && `~${x.change}`, x.replace && `±${x.replace}`, x.destroy && `−${x.destroy}`].filter(Boolean).join(' ') || 'outputs only';
 };
 
+// What a plan can be asked for from a PR comment.
+type PlanOpts = { destroy?: boolean; targets?: string[]; extraArgs?: string[]; refreshOnly?: boolean; replace?: string[] };
+
 export interface AppDeps {
   config: ServerConfig;
   store: Store;
@@ -189,6 +192,17 @@ export class App {
   get schedulerStats() { return this.sched.stats; }
 
   // Entry point for every webhook. Returns once the work has finished.
+  // Newest commit of each PR, recorded as push events arrive (before they queue), so
+  // plans still waiting for an older commit can skip themselves and free the slot.
+  private latestHead = new Map<string, string>();
+  private outdated(ctx: PrContext): boolean {
+    const latest = this.latestHead.get(`${ctx.repoKey}#${ctx.pr.number}`);
+    return !!latest && latest !== ctx.pr.headSha;
+  }
+
+  // Runs going and waiting right now, for the Metrics page.
+  get runQueue() { return this.sched.stats; }
+
   // Wraps an adapter so every comment tfv writes is remembered exactly as written.
   private recording(adapter: VcsAdapter): VcsAdapter {
     const store = this.deps.store;
@@ -253,6 +267,8 @@ export class App {
     }
     const number = 'pr' in event ? event.pr.number : event.prNumber;
     const key = `${event.repo.host}/${event.repo.fullName}#${number}`;
+    if (event.kind === 'pr_opened' || event.kind === 'pr_updated') this.latestHead.set(key, event.pr.headSha);
+    if (event.kind === 'pr_closed') this.latestHead.delete(key);
     return this.queue.run(key, async () => {
       try {
         switch (event.kind) {
@@ -424,6 +440,7 @@ export class App {
     if (!ctx.pr.open) return reply.say('❌ This PR is closed.');
 
     if (cmd.verb === 'unlock') return this.unlock(ctx, user, cmd, reply);
+    if (cmd.tool) return this.toolCommand(ctx, user, cmd, reply);
 
     if (cmd.verb === 'plan') {
       const changed = affectedProjects(ctx.projects, await adapter.changedFiles(repo, number));
@@ -436,12 +453,74 @@ export class App {
         const d = await this.allowed(ctx, 'plan', user, p);
         if (d.allowed) allowed.push(p); else notes.set(p.name, `🚫 ${d.reason}`);
       }
-      await this.plans(ctx, allowed, user, { destroy: cmd.destroy, targets: cmd.targets, extraArgs: cmd.extraArgs }, notes, reply);
+      await this.plans(ctx, allowed, user, { destroy: cmd.destroy, targets: cmd.targets, extraArgs: cmd.extraArgs, refreshOnly: cmd.refreshOnly, replace: cmd.replace }, notes, reply);
       if (this.commentMode(ctx) === 'update' || !allowed.length) reply.say(this.planOutcome(ctx, targets, notes));
       return;
     }
 
     return this.applyCommand(ctx, user, cmd, reply);
+  }
+
+  // ---- Terraform commands (state list, import, state rm, ...) ----
+
+  private async toolCommand(ctx: PrContext, user: string, cmd: Command, reply: Reply) {
+    const name = this.deps.config.commandNames[0];
+    const tool = cmd.tool!;
+    const text = `${name} ${tool}${cmd.project ? ` -p ${cmd.project}` : cmd.dir ? ` -d ${cmd.dir}` : ''}${cmd.workspace ? ` -w ${cmd.workspace}` : ''}${cmd.args?.length ? ` ${cmd.args.join(' ')}` : ''}`;
+    const picked = this.select(ctx, cmd, []);
+    if (typeof picked === 'string') return reply.say(`❌ ${picked}`);
+    if (picked.length !== 1) return reply.say(`❌ \`${name} ${tool}\` runs on one project; ${picked.length} match. Add \`-w <workspace>\` to pick one.`);
+    const project = picked[0];
+    const action = TOOL_ACTION[tool];
+    const changes = EDITS_STATE.includes(tool);
+
+    if (changes && ctx.policy.allow_state_changes === false) {
+      return reply.say(`❌ Editing the state from PR comments is turned off for this repo (\`allow_state_changes\` in repos.yaml).`);
+    }
+    const d = await this.allowed(ctx, action, user, project);
+    if (!d.allowed) return reply.say(`🚫 \`${text}\`: ${d.reason}`);
+    if (changes) {
+      // Changing the state outside a reviewed plan needs what an apply needs:
+      // the project's approvals and PR requirements.
+      if (!ctx.pr.open) return reply.say('❌ This PR is closed.');
+      const blockers = await applyBlockers(project, this.rules(ctx, project), ctx.pr, await this.approvers(ctx), ctx.lookup);
+      if (blockers.length) {
+        this.deps.store.audit({ repo: ctx.repoKey, pr: ctx.pr.number, user, action, project: project.name, allowed: false, reason: `blocked: ${blockers.join('; ')}` });
+        return reply.say(`🔒 \`${text}\` needs ${blockers.join('; ')}`);
+      }
+    }
+    // Changing the state takes the project's lock, like an apply.
+    if (changes) {
+      const lock = this.deps.store.acquireLock(ctx.repoKey, project.name, project.workspace, ctx.pr.number, user);
+      if (!lock.ok) return reply.say(`🔒 \`${project.name}\` is locked by #${lock.heldBy.pr} (${lock.heldBy.user}); apply or unlock it there first.`);
+    }
+
+    const r = await this.sched.use(`${ctx.repoKey}#${ctx.pr.number}`, async () => {
+      const tools = await this.tools(ctx, project);
+      return runTool({
+        root: ctx.root, project, tools, planPath: this.planPath(ctx, project), env: this.env(ctx, project, user), timeoutMs: this.deps.config.runTimeoutMs,
+      }, toolArgs(cmd));
+    });
+    this.deps.store.audit({
+      repo: ctx.repoKey, pr: ctx.pr.number, user, action: tool, project: project.name, allowed: true,
+      reason: `${r.ok ? 'ran' : 'failed'}: ${text}`,
+    });
+
+    // fmt reports unformatted files with exit code 3: that's a finding, not a failure.
+    const fmtFindings = tool === 'fmt' && r.code === 3;
+    const icon = r.ok ? '✅' : fmtFindings ? '📝' : '❌';
+    const empty = r.output.split('\n').length <= 1;
+    const out = [`${icon} \`${text}\``, ''];
+    if (fmtFindings) out.push('Some files need `terraform fmt`:', '');
+    if (!empty) out.push(fence(tail(r.output, ctx.adapter.commentLimit - 3000)));
+    else if (r.ok) out.push(tool === 'state list' || tool === 'output' ? '_Nothing in the state._' : '_No output._');
+    reply.say(out.join('\n'));
+
+    // The old plan was made against the old state: plan again (plan only).
+    if (r.ok && changes) {
+      reply.say(`🔁 The state was edited directly, so \`${project.name}\` is planned again. Review it before applying.`);
+      await this.plans(ctx, [project], user, {}, new Map(), reply);
+    }
   }
 
   // ---- plan ----
@@ -463,9 +542,11 @@ export class App {
     return [head, ...lines].join('\n');
   }
 
-  private async plans(ctx: PrContext, targets: Project[], user: string, opts: { destroy?: boolean; targets?: string[]; extraArgs?: string[] }, notes: Map<string, string>, reply?: Reply) {
+  private async plans(ctx: PrContext, targets: Project[], user: string, opts: PlanOpts, notes: Map<string, string>, reply?: Reply) {
     const { store } = this.deps;
     await Promise.all(targets.map(project => this.sched.use(`${ctx.repoKey}#${ctx.pr.number}`, async () => {
+      // A newer commit was pushed while this waited: its own plans are on the way.
+      if (this.outdated(ctx)) { notes.set(project.name, '⏭️ skipped: a newer commit was pushed'); return; }
       const lock = store.acquireLock(ctx.repoKey, project.name, project.workspace, ctx.pr.number, user);
       if (!lock.ok) {
         notes.set(project.name, `🔒 locked by #${lock.heldBy.pr} (${lock.heldBy.user}); apply or unlock it there first`);
@@ -473,6 +554,8 @@ export class App {
       }
       await this.planProject(ctx, project, user, opts);
     })));
+    // Nothing to report for a commit that's already been replaced.
+    if (this.outdated(ctx)) return;
     await this.refreshComment(ctx, notes, new Set([...targets.map(t => t.name), ...notes.keys()]), reply);
   }
 
@@ -496,7 +579,7 @@ export class App {
     return join(this.planDir(ctx.repo, ctx.pr.number), `${slug(project.name)}-${slug(project.workspace)}.tfplan`);
   }
 
-  private async planProject(ctx: PrContext, project: Project, user: string, opts: { destroy?: boolean; targets?: string[]; extraArgs?: string[] }) {
+  private async planProject(ctx: PrContext, project: Project, user: string, opts: PlanOpts) {
     const { store, config } = this.deps;
     const checkName = `tfv: ${project.name}`;
     const started = Date.now();
@@ -527,9 +610,10 @@ export class App {
       // Terragrunt: did this plan use a dependency's mock outputs?
       let mocks: string[] = [];
       const tgFile = join(ctx.root, project.dir, 'terragrunt.hcl');
-      if (r.ok && project.engine === 'terragrunt' && existsSync(tgFile)) {
+      if (project.engine === 'terragrunt' && existsSync(tgFile)) {
         const deps = terragruntDependencies(ctx.root, project.dir, readFileSync(tgFile, 'utf-8'));
-        mocks = mockedDependencies(project.dir, deps, r.output, r.plan)
+        // Planned: which dependencies were mocked. Failed: which ones it needed but couldn't read.
+        mocks = (r.ok ? mockedDependencies(project.dir, deps, r.output, r.plan) : unappliedDependencies(project.dir, deps, r.output))
           .map(dir => ctx.projects.find(p => p.dir === dir)?.name ?? dir);
       }
       const lock = join(ctx.root, project.dir, '.terraform.lock.hcl');
@@ -537,7 +621,7 @@ export class App {
       store.finishRun(runId, {
         status: r.ok ? 'success' : 'failed', engine, summary: r.summary ? JSON.stringify(r.summary) : null,
         output: r.output, planPath: r.ok ? planPath : null, hasChanges: r.hasChanges, destroys,
-        policy: policy ? JSON.stringify(policy) : null, mocks, providers,
+        policy: policy ? JSON.stringify(policy) : null, mocks, providers, usage: r.usage ?? null,
       });
       if (policy?.findings.length) store.saveFindings(store.getRun(runId)!, policy.mode, policy.findings);
     } catch (err) {
@@ -819,7 +903,8 @@ export class App {
       const tools = await this.tools(ctx, project);
       engine = engineLabel(tools);
       const r = await runApply({ root: ctx.root, project, tools, planPath: plan.planPath!, env: this.env(ctx, project, user), timeoutMs: config.runTimeoutMs });
-      store.finishRun(runId, { status: r.ok ? 'success' : 'failed', engine, output: r.output, summary: plan.summary });
+      // The counts are saved now, so the Metrics page never has to read logs.
+      store.finishRun(runId, { status: r.ok ? 'success' : 'failed', engine, output: r.output, summary: plan.summary, usage: r.usage ?? null, applied: parseApplyResult(r.output) });
     } catch (err) {
       store.finishRun(runId, { status: 'failed', engine, output: `tfv could not apply this project: ${(err as Error).message}` });
     }
@@ -847,6 +932,30 @@ export class App {
     reply.say(released.length
       ? `🔓 Unlocked ${released.map(p => `\`${p}\``).join(', ')} and discarded the plans. Run \`tfv plan\` to plan again.`
       : 'This PR holds no locks you can release.');
+  }
+
+  // A lock released from the dashboard: drop that project's plan (it was made under the
+  // lock) and tell the PR, so its people know why they must plan again.
+  async dashboardUnlock(adapter: VcsAdapter | undefined, lock: { repo: string; pr: number; project: string; workspace: string; user: string }, by: { name: string; via: string }): Promise<boolean> {
+    this.deps.store.discardPlans(lock.repo, lock.pr, lock.project);
+    if (!adapter) return false;
+    const [host, owner, ...rest] = lock.repo.split('/');
+    const name = rest.join('/');
+    const repo: Repo = { platform: adapter.platform, host, owner, name, fullName: `${owner}/${name}`, cloneUrl: '' };
+    const cmd = this.deps.config.commandNames[0];
+    const ws = lock.workspace !== 'default' ? ` (workspace \`${lock.workspace}\`)` : '';
+    try {
+      await this.recording(adapter).comment(repo, lock.pr, [
+        `🔓 **\`${lock.project}\`${ws} was unlocked from the tfv dashboard** by ${by.name} (${by.via}).`,
+        '',
+        `Its plan was discarded, and another PR may now plan and apply it. To continue here, plan it again:`,
+        ...cmdBlock(`${cmd} plan -p ${lock.project}`),
+      ].join('\n'));
+      return true;
+    } catch (err) {
+      log.warn('could not post the dashboard unlock to the PR', { repo: lock.repo, pr: lock.pr, err: (err as Error).message });
+      return false;
+    }
   }
 
   // ---- output ----

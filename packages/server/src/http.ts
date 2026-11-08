@@ -6,6 +6,7 @@ import { join } from 'node:path';
 import type { VcsAdapter, Platform } from './vcs/types.ts';
 import type { App } from './app.ts';
 import type { Store } from './store.ts';
+import { platformForHost } from './links.ts';
 import type { DriftScheduler } from './drift.ts';
 import type { Person } from './config.ts';
 import { presenter } from './present.ts';
@@ -27,12 +28,19 @@ for (const [path, file, type] of [
   ['/app.js', 'app.js', 'text/javascript; charset=utf-8'],
   ['/app.css', 'app.css', 'text/css; charset=utf-8'],
   ['/theme.js', 'theme.js', 'text/javascript; charset=utf-8'],
+  ['/favicon.svg', 'logo.svg', 'image/svg+xml'],
 ] as const) {
   try { WEB[path] = { type, body: readFileSync(join(WEB_DIR, file), 'utf-8') }; } catch { /* dashboard not shipped */ }
 }
 // The spinner GitHub shows in tfv's "Running…" replies (fetched by GitHub, so no auth).
 let SPINNER: Buffer | null = null;
 try { SPINNER = readFileSync(join(WEB_DIR, 'spinner.gif')); } catch { /* not shipped */ }
+
+// The server's version (packages/server/package.json), shown in the dashboard.
+let VERSION = 'dev';
+try { VERSION = JSON.parse(readFileSync(join(WEB_DIR, '..', 'package.json'), 'utf-8')).version ?? 'dev'; } catch { /* not shipped */ }
+const STARTED_AT = new Date().toISOString();
+const statsCache = new Map<string, { at: number; data: ReturnType<Store['stats']> }>();
 
 const WEB_HEADERS = {
   // Everything comes from this server; nothing inline, nothing third-party.
@@ -208,7 +216,40 @@ export const createHttpServer = (deps: HttpDeps): Server => {
       if (req.method === 'GET' && url.pathname === '/api/me') {
         const names: Record<string, string> = { github: 'GitHub', gitlab: 'GitLab', bitbucket: 'Bitbucket', azure: 'Azure DevOps' };
         const platforms = [...new Set(Object.values(deps.platforms ?? {}))].map(p => ({ id: p, name: names[p] ?? p }));
-        return send(res, 200, { name: who.name, role: who.role, via: who.via, platforms });
+        return send(res, 200, { name: who.name, role: who.role, via: who.via, platforms, version: VERSION });
+      }
+
+      if (req.method === 'GET' && url.pathname === '/api/stats') {
+        // Either the last N days, or a custom from/to (dates or ISO times; "to" is exclusive).
+        const date = (k: string) => { const v = url.searchParams.get(k); const t = v ? Date.parse(v) : NaN; return Number.isNaN(t) ? null : t; };
+        let fromMs = date('from');
+        let toMs = date('to');
+        if (fromMs === null) {
+          const n = Math.min(365, Math.max(1, Number(url.searchParams.get('days')) || 30));
+          fromMs = Date.now() - n * 864e5;
+          toMs = null;
+        }
+        if (toMs !== null && toMs <= fromMs) return send(res, 400, { error: '"to" must be after "from"' });
+        if ((toMs ?? Date.now()) - fromMs > 3 * 366 * 864e5) return send(res, 400, { error: 'the range can be at most 3 years' });
+        const from = new Date(fromMs).toISOString();
+        const to = toMs === null ? undefined : new Date(toMs).toISOString();
+        const days = Math.max(1, Math.ceil(((toMs ?? Date.now()) - fromMs) / 864e5));
+        // Cached for 30 seconds: dashboards refresh often, and the numbers barely move.
+        const cacheKey = `${url.searchParams.get('days') ?? ''}|${from.slice(0, 16)}|${to ?? ''}`;
+        const hit = statsCache.get(cacheKey);
+        let stats = hit && Date.now() - hit.at < 30_000 ? hit.data : null;
+        if (!stats) {
+          stats = deps.store.stats(from, to);
+          statsCache.set(cacheKey, { at: Date.now(), data: stats });
+          if (statsCache.size > 50) statsCache.delete(statsCache.keys().next().value!);
+        }
+        return send(res, 200, {
+          days, to: to ?? null, ...stats,
+          server: {
+            version: VERSION, node: process.version, uptime: Math.round(process.uptime()),
+            memory: process.memoryUsage().rss, queue: deps.app.runQueue ?? null, startedAt: STARTED_AT,
+          },
+        });
       }
 
       if (req.method === 'POST' && url.pathname === '/api/locks/unlock') {
@@ -218,7 +259,10 @@ export const createHttpServer = (deps: HttpDeps): Server => {
         if (!lock) return send(res, 404, { error: 'no such lock' });
         deps.store.releaseLock(lock.repo, lock.project, lock.workspace);
         deps.store.audit({ repo: lock.repo, pr: lock.pr, user: who.name, action: 'unlock', project: lock.project, allowed: true, reason: `released from the dashboard (${who.via})` });
-        return send(res, 200, { released: lock });
+        const host = lock.repo.split('/')[0];
+        const adapter = deps.adapters[platformForHost(host, deps.platforms ?? {})];
+        const notified = await deps.app.dashboardUnlock(adapter, lock, who);
+        return send(res, 200, { released: lock, notified });
       }
 
       if (req.method === 'POST' && url.pathname === '/api/drift/run') {

@@ -38,9 +38,15 @@ repos: {}
 #  repos:
 #    - id: github.com/acme/*
 #      require_apply_project: true
+#      allow_state_changes: true          # false: no import/taint/state rm/state mv/force-unlock from PRs
 #      projects:
 #        - match: prod/**
-#          permissions: { apply: [team:platform-admins] }
+#          permissions:
+#            apply: [team:platform-admins]
+#            apply_destroy: [admin]
+#            state_read: [team:platform-admins]   # state show, show, output
+#            state_remove: [admin]                # state rm, state mv, force-unlock
+#            force_unlock: []                     # single commands can be set too; [] = nobody
 #          approvals: [{ from: team:platform-admins, count: 2 }]
 
 dashboard:
