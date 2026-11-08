@@ -122,3 +122,23 @@ test('webhook: someone else editing a bot comment is reported; the bot editing i
   assert.deepEqual({ ...ev('mallory'), repo: undefined }, { kind: 'bot_comment_changed', repo: undefined, prNumber: 7, commentId: '5', by: 'mallory', change: 'edited', body: 'x' });
   assert.equal(ev('tfv[bot]').kind, 'ignored');
 });
+
+test('a repo with no installation id (dashboard, schedules) finds it once and reuses it', async () => {
+  const seen: string[] = [];
+  const fake: typeof fetch = async (url) => {
+    const u = String(url);
+    seen.push(u.replace('https://api.github.com', ''));
+    if (u.endsWith('/repos/acme/infra/installation')) return new Response(JSON.stringify({ id: 77 }));
+    if (u.endsWith('/app/installations/77/access_tokens')) return new Response(JSON.stringify({ token: 'ghs_x', expires_at: new Date(Date.now() + 3600e3).toISOString() }));
+    if (u.includes('/issues/1/comments')) return new Response(JSON.stringify({ id: 5, html_url: 'u' }), { status: 201 });
+    return new Response('{"message":"Not Found"}', { status: 404 });
+  };
+  const a = new GitHubAdapter(cfg, fake);
+  const repo = { platform: 'github' as const, host: 'github.com', owner: 'acme', name: 'infra', fullName: 'acme/infra', cloneUrl: '' };
+  assert.equal(await a.comment(repo, 1, 'hi'), '5');
+  assert.equal(await a.comment(repo, 1, 'again'), '5');
+  assert.equal(seen.filter(u => u.endsWith('/installation')).length, 1, 'looked up once');
+  // Not installed on the repo: a clear error.
+  const none = new GitHubAdapter(cfg, async () => new Response('{}', { status: 404 }));
+  await assert.rejects(none.comment({ ...repo, fullName: 'acme/other' }, 1, 'x'), /no GitHub App installation for acme\/other \(HTTP 404\); is the App installed on it\?/);
+});

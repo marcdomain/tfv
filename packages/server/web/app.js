@@ -873,6 +873,7 @@
   };
   const route = async () => {
     if (!me) return;
+    if (picker.el) closePicker(); // a popup belongs to the page it was opened on
     const { name, arg, params } = current();
     const viewName = views[name] ? name : 'overview';
     document.querySelectorAll('#nav a').forEach(a => a.classList.toggle('active', a.dataset.view === viewName));

@@ -106,11 +106,13 @@ test('each project body is indented under its project (blockquote), output shown
   assert.match(section, /```\n\n<\/blockquote>\n<\/details>/, 'the output ends the section');
 });
 
-test('"apply all ready projects" only shows where the server allows it', () => {
+test('applying every ready project is offered in the footer only, where the server allows it', () => {
   const ready = (name: string) => ({ name, plan: run({ project: name, destroys: 0 }), blockers: [] });
   const input = { marker: 'M', headSha: 'abc1234', command: 'tfv', limit: 65000, projects: [ready('a'), ready('b')] };
-  assert.match(renderComment(input), /- Or apply both ready projects at once:\n  ```\n  tfv apply\n  ```/);
-  assert.match(renderComment({ ...input, projects: [ready('a'), ready('b'), ready('c')] }), /Or apply all 3 ready projects at once:/);
+  // Applying them all is in the footer only ("tfv apply applies every ready project").
+  const both = renderComment(input);
+  assert.doesNotMatch(both, /ready projects at once/);
+  assert.match(both, /`tfv apply` applies every ready project/);
   const strict = renderComment({ ...input, oneProjectPerApply: true });
   assert.doesNotMatch(strict, /ready projects at once/);
   assert.match(strict, /Apply one project at a time: `tfv apply -p <project>`/);

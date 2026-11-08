@@ -294,10 +294,6 @@ export const renderComment = (input: CommentInput): string => {
   // What needs attention. Ready projects aren't repeated here: the table shows them,
   // with ▶ Apply, and each project's section has its apply command.
   const steps: string[] = [];
-  // Only where this server lets one command apply several projects.
-  if (ready.length > 1 && !input.oneProjectPerApply) {
-    steps.push(`- Or apply ${ready.length === 2 ? 'both' : `all ${ready.length}`} ready projects at once:`, ...listCmd(`${command} apply`));
-  }
   for (const v of waiting) steps.push(`- 🔒 **\`${v.name}\`** needs ${v.blockers!.join('; ')}`);
   for (const v of projects.filter(x => x.plan?.status === 'failed' && x.plan.mocks?.length)) {
     const deps = v.plan!.mocks;

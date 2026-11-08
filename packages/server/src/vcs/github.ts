@@ -66,9 +66,27 @@ export class GitHubAdapter implements VcsAdapter {
 
   // ---- auth ----
 
+  // Which installation of the App covers a repo. Webhooks carry it; for work that
+  // starts elsewhere (the dashboard, schedules) it's looked up once and remembered.
+  private installationIds = new Map<string, number>();
+  private async installationFor(repo: Repo): Promise<number> {
+    if (repo.installationId) {
+      this.installationIds.set(repo.fullName.toLowerCase(), repo.installationId);
+      return repo.installationId;
+    }
+    const known = this.installationIds.get(repo.fullName.toLowerCase());
+    if (known) return known;
+    const res = await this.fetchImpl(`${this.cfg.apiUrl}/repos/${repo.fullName}/installation`, {
+      headers: { Authorization: `Bearer ${appJwt(this.cfg.appId, this.cfg.privateKey)}`, Accept: 'application/vnd.github+json', 'User-Agent': 'tfv-server' },
+    });
+    if (!res.ok) throw new Error(`no GitHub App installation for ${repo.fullName} (HTTP ${res.status}); is the App installed on it?`);
+    const id = (await res.json() as { id: number }).id;
+    this.installationIds.set(repo.fullName.toLowerCase(), id);
+    return id;
+  }
+
   private async installationToken(repo: Repo): Promise<string> {
-    const id = repo.installationId;
-    if (!id) throw new Error(`no GitHub App installation for ${repo.fullName}`);
+    const id = await this.installationFor(repo);
     const cached = this.tokens.get(id);
     if (cached && cached.expires - 5 * 60_000 > Date.now()) return cached.token;
     const res = await this.fetchImpl(`${this.cfg.apiUrl}/app/installations/${id}/access_tokens`, {

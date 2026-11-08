@@ -4,7 +4,7 @@ Runs [tfv server](../../packages/server/README.md) on Kubernetes. It's pull requ
 for Terraform, OpenTofu and Terragrunt, with per-project RBAC and approvers, drift alerts, and a
 dashboard.
 
-![tfv server: PR comment, checks, RBAC, apply, targeted plans, drift alerts and the dashboard](docs/flow.gif)
+![tfv server: the PR comment, Terraform commands, the apply report, and the dashboard with runs, date ranges, metrics, resource usage and unlocking](docs/flow.gif)
 
 ## Install
 
