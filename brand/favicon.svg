@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64">
+  <title>tfv</title>
+  <defs>
+    <linearGradient id="tfv-top" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#c7d2fe"/><stop offset="1" stop-color="#8b9bfb"/></linearGradient>
+    <linearGradient id="tfv-left" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#6d6af7"/><stop offset="1" stop-color="#4f46e5"/></linearGradient>
+    <linearGradient id="tfv-right" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#4338ca"/><stop offset="1" stop-color="#312e81"/></linearGradient>
+  </defs>
+  <g stroke-linejoin="round" stroke-width="3.5">
+    <path d="M32 4 L55 19 L32 35 L9 19 Z" fill="url(#tfv-top)" stroke="url(#tfv-top)"/>
+    <path d="M9 19 L32 35 L32 60 L9 45 Z" fill="url(#tfv-left)" stroke="url(#tfv-left)"/>
+    <path d="M55 19 L32 35 L32 60 L55 45 Z" fill="url(#tfv-right)" stroke="url(#tfv-right)"/>
+  </g>
+  <path d="M14.5 32.5 L32 45 L49.5 32.5" fill="none" stroke="#fff" stroke-opacity="0.32" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M14 21.5 L32 34 L50 21.5" fill="none" stroke="#fff" stroke-width="5.5" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>

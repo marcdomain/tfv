@@ -4,7 +4,7 @@ Runs [tfv server](../../packages/server/README.md) on Kubernetes. It's pull requ
 for Terraform, OpenTofu and Terragrunt, with per-project RBAC and approvers, drift alerts, and a
 dashboard.
 
-![tfv server: PR comment, checks, RBAC, apply, targeted plans, drift alerts and the dashboard](docs/flow.gif)
+![tfv server: the PR comment, Terraform commands, the apply report, and the dashboard with runs, date ranges, metrics, resource usage and unlocking](docs/flow.gif)
 
 ## Install
 
@@ -81,9 +81,9 @@ HttpOnly cookies. The chart generates the signing key once and keeps it across u
 | `config.repoAllowlist` | `[]` | Repos tfv may act on, e.g. `github.com/acme/*` |
 | `config.requireApplyProject` | `false` | Refuse a bare `tfv apply`; one project at a time |
 | `config.ackReaction` | `eyes` | Reaction on a command tfv picked up: `eyes`, `rocket`, `+1`, `heart`, `hooray`, `laugh`, `confused`, `-1` or `none` |
-| `config.progressReply` | `true` | A spinning "Running…" reply under the command that turns into the result. Needs a public https URL; skipped otherwise |
+| `config.progressReply` | `false` | Off: results are posted once and never edited. On: a spinning "Running…" reply edited into the result (needs a public https URL) |
 | `config.commentMode` | `new` | `new`: a new comment for each plan and apply. `update`: one comment at the top, edited in place |
-| `config.parallelism` | `4` | Plans running at once |
+| `config.parallelism` | `4` | Plans and applies running at once, shared fairly between PRs |
 | `config.preinstall` | `[]` | e.g. `[terraform@1.9.8, tofu@1.8.5]` |
 | `repos` | `{}` | Full `repos.yaml`: rules, approvers, channels, people, drift schedules |
 | `extraEnvFrom` / `extraEnv` | `[]` | Cloud credentials, `TFV_SLACK_TOKEN`, `TFV_TEAMS_WEBHOOK`, … |
@@ -103,13 +103,20 @@ repos:
     - id: github.com/acme/infra
       projects:
         - match: prod/**
-          permissions: { apply: [team:platform-admins], apply_destroy: [admin] }
+          permissions:
+            apply: [team:platform-admins]
+            apply_destroy: [admin]       # also covers state rm / state mv / force-unlock
+            force_unlock: []             # single commands can be set too; [] = nobody
           approvals: [{ from: team:platform-admins, count: 2 }]
       drift:
         - { name: prod-nightly, projects: ["prod/**"], schedule: "0 6 * * 1-5", timezone: Europe/Berlin, notify: [infra-alerts] }
 extraEnvFrom:
   - secretRef: { name: tfv-chat-tokens }   # holds TFV_SLACK_TOKEN
 ```
+
+Policy checks, the two-person rule and permissions for Terraform commands (`state rm`,
+`import`, …) go in the same `repos` value; see the
+[server README](../../packages/server/README.md#rules-reposyaml).
 
 ## How it runs
 

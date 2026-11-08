@@ -140,11 +140,11 @@
     const range = params.get('range') || 'all';
     return `<div class="f"><span>When</span><div class="seg" role="group" aria-label="Time range">${RANGES.map(([v, l]) =>
       `<button type="button" data-range="${v}" aria-pressed="${v === range}">${l}</button>`).join('')}</div></div>
-      <div class="f custom"${range === 'custom' ? '' : ' hidden'}><span>From – to</span><span class="dates">
-        <input type="date" name="from" value="${esc(params.get('from') || '')}" aria-label="From"> – <input type="date" name="to" value="${esc(params.get('to') || '')}" aria-label="To"></span></div>`;
+      <div class="f custom"${range === 'custom' ? '' : ' hidden'}><span>From – to</span>${dateTrigger('filters', params.get('from'), params.get('to'))}</div>`;
   };
   const LABELS = {
     q: 'Search', user: 'Person', project: 'Project', status: 'Result', kind: 'Type', action: 'Action', result: 'Decision', range: 'When', sort: 'Sort',
+    rule: 'Rule', severity: 'Severity', mode: 'Mode',
   };
   const STATUS = [['', 'Any result'], ['changes', 'Has changes'], ['destroys', 'Destroys or replaces'], ['nochanges', 'No changes'], ['applied', 'Applied'], ['failed', 'Failed'], ['running', 'Running']];
   const chips = (params) => {
@@ -156,6 +156,174 @@
       `<button type="button" class="chip" data-clear="${k}" title="Remove this filter"><span>${esc(LABELS[k])}:</span> ${esc(text(k, v))} <b aria-hidden="true">×</b></button>`).join('')}
       <button type="button" class="chip clear" data-clear="*">Clear all</button></div>`;
   };
+
+  // ---- date-range picker ------------------------------------------------------
+  const CAL_ICON = '<svg class="ni" viewBox="0 0 16 16" aria-hidden="true"><rect x="2" y="3" width="12" height="11" rx="2"/><path d="M2 6.5h12M5.5 1.8v2.4M10.5 1.8v2.4"/></svg>';
+  const iso = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+  const parseDay = (s) => (s && /^\d{4}-\d{2}-\d{2}$/.test(s) ? new Date(`${s}T00:00`) : null);
+  const longDay = (s) => (s ? parseDay(s).toLocaleDateString([], { day: 'numeric', month: 'short', year: 'numeric' }) : '');
+  const dateTrigger = (kind, from, to) => `<button type="button" class="date-trigger" data-picker="${kind}" data-from="${esc(from || '')}" data-to="${esc(to || '')}" aria-haspopup="dialog">
+      ${CAL_ICON}<span>${from && to ? `${esc(longDay(from))} <span class="muted">–</span> ${esc(longDay(to))}` : '<span class="muted">Pick dates</span>'}</span>
+      <svg class="ni chev" viewBox="0 0 16 16" aria-hidden="true"><path d="m4.5 6.5 3.5 3.5 3.5-3.5"/></svg></button>`;
+
+  const picker = { el: null, trigger: null, from: null, to: null, month: null, onApply: null };
+  const PRESETS = [
+    ['Today', 0, 0], ['Yesterday', 1, 1], ['Last 7 days', 6, 0], ['Last 14 days', 13, 0], ['Last 30 days', 29, 0],
+    ['This month', 'tm'], ['Last month', 'lm'], ['Last 90 days', 89, 0],
+  ];
+  const presetRange = (p) => {
+    const now = new Date(); now.setHours(0, 0, 0, 0);
+    if (p[1] === 'tm') return [new Date(now.getFullYear(), now.getMonth(), 1), now];
+    if (p[1] === 'lm') return [new Date(now.getFullYear(), now.getMonth() - 1, 1), new Date(now.getFullYear(), now.getMonth(), 0)];
+    const day = (n) => new Date(now.getFullYear(), now.getMonth(), now.getDate() - n);
+    return [day(p[1]), day(p[2])];
+  };
+  const monthGrid = (first) => {
+    const today = iso(new Date());
+    const lead = (first.getDay() + 6) % 7; // weeks start on Monday
+    const days = new Date(first.getFullYear(), first.getMonth() + 1, 0).getDate();
+    const cells = [];
+    for (let i = 0; i < lead; i++) cells.push('<span class="cal-pad"></span>');
+    for (let n = 1; n <= days; n++) {
+      const d = iso(new Date(first.getFullYear(), first.getMonth(), n));
+      const lo = picker.from, hi = picker.to ?? picker.hover ?? picker.from;
+      const [a, b] = lo && hi && hi < lo ? [hi, lo] : [lo, hi];
+      const cls = [
+        'cal-day',
+        d === today && 'today',
+        a && b && d > a && d < b && 'in',
+        d === a && 'start', d === b && 'end',
+      ].filter(Boolean).join(' ');
+      cells.push(`<button type="button" class="${cls}" data-day="${d}"${d > today ? ' disabled' : ''} aria-pressed="${d === a || d === b}" aria-label="${esc(parseDay(d).toLocaleDateString([], { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' }))}">${n}</button>`);
+    }
+    return `<div class="cal-month">
+      <div class="cal-title">${esc(first.toLocaleDateString([], { month: 'long', year: 'numeric' }))}</div>
+      <div class="cal-grid">${['Mo', 'Tu', 'We', 'Th', 'Fr', 'Sa', 'Su'].map(w => `<span class="cal-wd">${w}</span>`).join('')}${cells.join('')}</div>
+    </div>`;
+  };
+  const renderPicker = () => {
+    const m = picker.month;
+    const next = new Date(m.getFullYear(), m.getMonth() + 1, 1);
+    const atEnd = next > new Date();
+    const [a, b] = picker.from && picker.to ? [picker.from, picker.to].sort() : [picker.from, null];
+    const nDays = a && b ? Math.round((parseDay(b) - parseDay(a)) / 864e5) + 1 : 0;
+    picker.el.innerHTML = `
+      <div class="cal-presets">${PRESETS.map((p, i) => `<button type="button" data-preset="${i}">${esc(p[0])}</button>`).join('')}</div>
+      <div class="cal-main">
+        <div class="cal-nav">
+          <button type="button" class="ghost small icon" data-cal-move="-1" aria-label="Previous month">‹</button>
+          <button type="button" class="ghost small icon" data-cal-move="1" aria-label="Next month"${atEnd ? ' disabled' : ''}>›</button>
+        </div>
+        <div class="cal-months">${monthGrid(m)}${monthGrid(next)}</div>
+        <div class="cal-foot">
+          <span class="small">${a && b ? `<b>${esc(longDay(a))}</b> – <b>${esc(longDay(b))}</b> <span class="muted">· ${nDays} day${nDays === 1 ? '' : 's'}</span>`
+            : a ? `<b>${esc(longDay(a))}</b> <span class="muted">– pick the end date</span>` : '<span class="muted">Pick a start date</span>'}</span>
+          <span class="cal-actions"><button type="button" class="ghost small" data-cal-cancel>Cancel</button><button type="button" class="small" data-cal-apply${a && b ? '' : ' disabled'}>Apply</button></span>
+        </div>
+      </div>`;
+  };
+  const closePicker = () => {
+    picker.el?.remove();
+    picker.el = null;
+    picker.trigger?.setAttribute('aria-expanded', 'false');
+    picker.trigger?.focus();
+    picker.trigger = null;
+  };
+  const openPicker = (trigger, onApply) => {
+    closePicker();
+    picker.trigger = trigger;
+    picker.onApply = onApply;
+    picker.from = trigger.dataset.from || null;
+    picker.to = trigger.dataset.to || null;
+    picker.hover = null;
+    const anchor = parseDay(picker.to) || new Date();
+    // Show the end date's month on the right.
+    picker.month = new Date(anchor.getFullYear(), anchor.getMonth() - 1, 1);
+    const el = document.createElement('div');
+    el.className = 'cal';
+    el.setAttribute('role', 'dialog');
+    el.setAttribute('aria-label', 'Choose a date range');
+    picker.el = el;
+    renderPicker();
+    document.body.appendChild(el);
+    trigger.setAttribute('aria-expanded', 'true');
+    const r = trigger.getBoundingClientRect();
+    const left = Math.max(8, Math.min(window.innerWidth - el.offsetWidth - 8, r.right - el.offsetWidth));
+    el.style.left = `${left}px`;
+    el.style.top = `${r.bottom + window.scrollY + 6}px`;
+    el.querySelector('.cal-day.start, .cal-day:not([disabled])')?.focus();
+    el.addEventListener('click', (e) => {
+      const day = e.target.closest('[data-day]');
+      if (day) {
+        if (!picker.from || picker.to) { picker.from = day.dataset.day; picker.to = null; }
+        else { picker.to = day.dataset.day; if (picker.to < picker.from) [picker.from, picker.to] = [picker.to, picker.from]; }
+        renderPicker();
+        picker.el.querySelector(`[data-day="${day.dataset.day}"]`)?.focus();
+        return;
+      }
+      const preset = e.target.closest('[data-preset]');
+      if (preset) {
+        const [a, b] = presetRange(PRESETS[Number(preset.dataset.preset)]);
+        picker.from = iso(a); picker.to = iso(b);
+        picker.month = new Date(b.getFullYear(), b.getMonth() - 1, 1);
+        renderPicker();
+        return;
+      }
+      const move = e.target.closest('[data-cal-move]');
+      if (move) { picker.month = new Date(picker.month.getFullYear(), picker.month.getMonth() + Number(move.dataset.calMove), 1); renderPicker(); return; }
+      if (e.target.closest('[data-cal-cancel]')) return closePicker();
+      if (e.target.closest('[data-cal-apply]')) {
+        const [a, b] = [picker.from, picker.to].sort();
+        const apply = picker.onApply;
+        closePicker();
+        apply(a, b);
+      }
+    });
+    // While choosing the end, preview the range under the pointer.
+    el.addEventListener('mouseover', (e) => {
+      const day = e.target.closest('[data-day]');
+      if (!day || !picker.from || picker.to || picker.hover === day.dataset.day) return;
+      picker.hover = day.dataset.day;
+      el.querySelectorAll('.cal-day').forEach(b => {
+        const d = b.dataset.day;
+        const [a, z] = [picker.from, picker.hover].sort();
+        b.classList.toggle('in', d > a && d < z);
+        b.classList.toggle('end', d === z && d !== picker.from);
+        b.classList.toggle('start', d === a);
+      });
+    });
+  };
+  document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && picker.el) closePicker(); });
+  document.addEventListener('mousedown', (e) => {
+    if (picker.el && !picker.el.contains(e.target) && !picker.trigger?.contains(e.target)) closePicker();
+  });
+
+  // ---- pages ----------------------------------------------------------------
+  const PAGE_SIZES = [10, 25, 50, 100];
+  let savedSize = null;
+  try { savedSize = Number(localStorage.getItem('tfv-page-size')); } catch { /* ignore */ }
+  const pageOf = (params) => {
+    const size = PAGE_SIZES.includes(Number(params.get('size'))) ? Number(params.get('size')) : PAGE_SIZES.includes(savedSize) ? savedSize : 25;
+    const page = Math.max(1, Math.floor(Number(params.get('page')) || 1));
+    return { size, page, offset: (page - 1) * size };
+  };
+  // "26–50 of 420 · Rows per page [25] · ‹ Previous · Page 2 of 17 · Next ›"
+  const pager = (total, params) => {
+    const { size, page } = pageOf(params);
+    const pages = Math.max(1, Math.ceil(total / size));
+    const first = total ? (page - 1) * size + 1 : 0;
+    const last = Math.min(total, page * size);
+    return `<div class="pager">
+      <span class="muted small">${fmtN(first)}–${fmtN(last)} of ${fmtN(total)}</span>
+      <label class="small muted">Rows per page <select data-size>${PAGE_SIZES.map(n => `<option value="${n}"${n === size ? ' selected' : ''}>${n}</option>`).join('')}</select></label>
+      <span class="pages">
+        <button type="button" class="ghost small" data-page="${page - 1}"${page <= 1 ? ' disabled' : ''} aria-label="Previous page">‹ Previous</button>
+        <span class="small">Page ${fmtN(Math.min(page, pages))} of ${fmtN(pages)}</span>
+        <button type="button" class="ghost small" data-page="${page + 1}"${page >= pages ? ' disabled' : ''} aria-label="Next page">Next ›</button>
+      </span>
+    </div>`;
+  };
+  const fmtN = (n) => Number(n || 0).toLocaleString();
 
   // ---- views --------------------------------------------------------------
   const runRow = (r) => {
@@ -244,7 +412,7 @@
           <label class="f grow"><span>Search</span><input type="search" name="q" value="${esc(params.get('q') || '')}" placeholder="Project, repo or person"></label>
           ${select('sort', 'Sort', [['recent', 'Recently active'], ['name', 'Name A–Z'], ['runs', 'Most runs']], params)}
         </form>
-        <div class="card">${table(['Project', 'Repository', 'Last run', 'By', 'Last applied', 'Lock', 'Runs'], list.map(p => {
+        <div class="card">${table(['Project', 'Repository', 'Last run', 'By', 'Last applied', 'Lock', 'Runs'], list.slice(pageOf(params).offset, pageOf(params).offset + pageOf(params).size).map(p => {
           const r = p.lastRun;
           const a = p.lastApply;
           return `<tr class="click" data-href="${esc(listLink('runs', { project: p.project }))}">
@@ -256,7 +424,7 @@
             <td>${p.lock ? `<span class="inline">${ext(p.lock.links?.pr, `#${p.lock.pr}`, 'plain')} ${who(p.lock.user, p.lock.links?.user, null, p.lock.links?.userAvatar)}</span>` : '<span class="muted">free</span>'}</td>
             <td class="num"><a class="plain" href="${esc(listLink('runs', { project: p.project }))}">${p.runs}</a></td>
           </tr>`;
-        }), q ? 'No project matches your search.' : 'No projects yet.')}</div>`;
+        }), q ? 'No project matches your search.' : 'No projects yet.')}${list.length ? pager(list.length, params) : ''}</div>`;
     },
 
     async run(id) {
@@ -274,6 +442,8 @@
             <span>${ext(L.commit, `<span class="mono">${esc(r.headSha.slice(0, 7))}</span>`, 'plain')}</span>
             <span>${esc(r.engine)}</span>
             <span title="${esc(when(r.startedAt))}">${ago(r.startedAt)}${r.finishedAt ? ` · took ${duration(r.startedAt, r.finishedAt)}` : ''}</span>
+            ${r.usage ? (r.usage.quick ? '<span class="muted">too quick to measure CPU and memory</span>'
+              : `<span title="Terraform and its providers, together">peak memory <b>${bytesText(r.usage.peakMemory)}</b> · CPU <b>${secsText(r.usage.cpuSeconds)}</b> · ${r.usage.peakProcesses} processes</span>`) : ''}
           </div>
           <div class="people">${runPeople(r, 'av-lg')}</div>
           ${L.pr ? `<div class="links">
@@ -301,7 +471,7 @@
             <td class="mono">${esc(l.project)}</td><td class="mono muted">${esc(l.workspace)}</td>
             <td>${prLink(l)}</td>
             <td>${who(l.user, l.links?.user, null, l.links?.userAvatar)}</td><td class="muted" title="${esc(when(l.createdAt))}">${ago(l.createdAt)}</td>
-            <td>${adminButton('Unlock', `data-unlock='${esc(JSON.stringify({ repo: l.repo, project: l.project, workspace: l.workspace }))}'`)}</td>
+            <td>${adminButton('Unlock', `data-unlock='${esc(JSON.stringify({ repo: l.repo, project: l.project, workspace: l.workspace, pr: l.pr, user: l.user, createdAt: l.createdAt, prUrl: l.links?.pr ?? null }))}'`)}</td>
           </tr>`;
         }), 'No projects are locked.')}</div>`;
     },
@@ -345,8 +515,29 @@
 
     async audit(_arg, params) {
       const f = await api('/api/facets');
+      const tab = params.get('tab') === 'policy' ? 'policy' : 'decisions';
+      const tabs = `<div class="tabs" role="tablist">
+        <a role="tab" aria-selected="${tab === 'decisions'}" href="#audit">Decisions</a>
+        <a role="tab" aria-selected="${tab === 'policy'}" href="#audit?tab=policy">Policy findings</a></div>`;
+      if (tab === 'policy') {
+        return `
+          <div class="page-head"><h1>Audit</h1><span class="muted">Policy findings on every plan, in audit and enforce mode</span></div>
+          ${tabs}
+          <form class="filters" data-list="policy" autocomplete="off">
+            <input type="hidden" name="tab" value="policy">
+            <label class="f grow"><span>Search</span><input type="search" name="q" value="${esc(params.get('q') || '')}" placeholder="Rule, resource, message, project or person"></label>
+            ${select('project', 'Project', [['', 'All projects'], ...f.projects.map(x => [x, x])], params)}
+            ${select('rule', 'Rule', [['', 'Any rule'], ...f.rules.map(x => [x, x])], params)}
+            ${select('severity', 'Severity', [['', 'Any severity'], ['critical', 'Critical'], ['high', 'High'], ['medium', 'Medium'], ['low', 'Low']], params)}
+            ${select('mode', 'Mode', [['', 'Audit or enforce'], ['enforce', 'Enforced (blocking)'], ['audit', 'Audit only']], params)}
+            ${rangeControl(params)}
+          </form>
+          <div id="chips">${chips(params)}</div>
+          <div class="card" id="results"><div class="empty">Loading…</div></div>`;
+      }
       return `
-        <div class="page-head"><h1>Audit log</h1><span class="muted">Every permission decision, allowed or denied</span></div>
+        <div class="page-head"><h1>Audit</h1><span class="muted">Every permission decision, allowed or denied</span></div>
+        ${tabs}
         <form class="filters" data-list="audit" autocomplete="off">
           <label class="f grow"><span>Search</span><input type="search" name="q" value="${esc(params.get('q') || '')}" placeholder="Person, project, repo or reason"></label>
           ${select('user', 'Person', [['', 'Anyone'], ...f.users.map(u => [u, u])], params)}
@@ -358,7 +549,241 @@
         <div id="chips">${chips(params)}</div>
         <div class="card" id="results"><div class="empty">Loading…</div></div>`;
     },
+
+    async metrics(_arg, params) {
+      // Last 7/30/90 days, or a custom range (dates inclusive, in the viewer's time zone).
+      const custom = params.get('days') === 'custom';
+      const days = custom ? 'custom' : ['7', '30', '90'].includes(params.get('days')) ? params.get('days') : '30';
+      const today = new Date().toISOString().slice(0, 10);
+      const fromDay = params.get('from') || new Date(Date.now() - 29 * 864e5).toISOString().slice(0, 10);
+      const toDay = params.get('to') || today;
+      const startOf = (d) => new Date(`${d}T00:00`);
+      const q = custom
+        ? `from=${encodeURIComponent(startOf(fromDay).toISOString())}&to=${encodeURIComponent(new Date(startOf(toDay).getTime() + 864e5).toISOString())}`
+        : `days=${days}`;
+      const m = await api(`/api/stats?${q}`);
+      const period = custom ? `${dayLabel(fromDay)} – ${dayLabel(toDay)}` : `${days} days`;
+      const t = m.totals;
+      const pct = t.runs ? Math.round(((t.runs - t.failed) / t.runs) * 1000) / 10 : null;
+      const res = m.resources;
+      const sev = Object.fromEntries(m.policy.bySeverity.map(x => [x.severity, x.n]));
+      const findings = m.policy.bySeverity.reduce((a, x) => a + x.n, 0);
+      const denied = m.decisions.denied.reduce((a, x) => a + x.n, 0);
+      const drift = Object.fromEntries(m.drift.map(x => [x.status, x.n]));
+      const series = custom ? dailySeriesBetween(m.daily, fromDay, toDay) : dailySeries(m.daily, Number(days));
+      const seg = `<div class="period">
+        <div class="seg" role="group" aria-label="Period">${[['7', '7 days'], ['30', '30 days'], ['90', '90 days'], ['custom', 'Custom']].map(([v, l]) =>
+          `<button type="button" data-days="${v}" aria-pressed="${v === days}">${l}</button>`).join('')}</div>
+        ${custom ? dateTrigger('metrics', fromDay, toDay) : ''}
+      </div>`;
+      return `
+        <div class="page-head"><h1>Metrics</h1>${seg}</div>
+        <div class="tiles hero">
+          ${tile(fmt(t.runs), 'runs', `${fmt(t.plans)} plans · ${fmt(t.applies)} applies`, custom ? listLink('runs', { range: 'custom', from: fromDay, to: toDay }) : listLink('runs', { range: days === '7' ? '7d' : '30d' }))}
+          ${tile(pct === null ? '—' : `${pct}<small>%</small>`, 'succeeded', `${fmt(t.failed)} failed`, listLink('runs', { status: 'failed' }), t.failed ? 'bad' : '')}
+          ${tile(fmt(res.added + res.changed + res.destroyed), 'resources changed by applies', `+${fmt(res.added)} · ~${fmt(res.changed)} · −${fmt(res.destroyed)}`)}
+          ${tile(secsText(m.timing.plan.p50), 'median plan time', `p95 ${secsText(m.timing.plan.p95)}`)}
+          ${tile(secsText(m.timing.apply.p50), 'median apply time', `p95 ${secsText(m.timing.apply.p95)}`)}
+          ${tile(fmt(t.prs), 'pull requests', `${fmt(t.users)} people · ${fmt(t.projects)} projects`)}
+        </div>
+        <div class="card viz">
+          <div class="card-head"><h2>Runs per day</h2><span class="muted small">hover a day for details</span></div>
+          <div class="legend"><span><i class="key s1"></i>Plans</span><span><i class="key s2"></i>Applies</span></div>
+          <div class="chart">${columnChart(series, [['plans', 's1', 'Plans'], ['applies', 's2', 'Applies']], 'Runs per day')}</div>
+          ${tableView(['Day', 'Plans', 'Applies', 'Failed'], series.map(d => [d.day, d.plans, d.applies, d.failed]))}
+        </div>
+        <div class="card viz">
+          <div class="card-head"><h2>Failed runs per day</h2><span class="muted small">${fmt(t.failed)} in ${esc(period)}</span></div>
+          <div class="chart">${columnChart(series, [['failed', 'sbad', 'Failed']], 'Failed runs per day', 110)}</div>
+          ${tableView(['Day', 'Failed'], series.filter(d => d.failed).map(d => [d.day, d.failed]))}
+        </div>
+        <div class="grid3">
+          <div class="card viz"><div class="card-head"><h2>Busiest projects</h2><a href="#projects">All projects</a></div>
+            ${bars(m.projects.map(p => ({ label: `<span class="mono">${projLink(p.project)}</span>`, value: p.runs, note: p.failed ? `${p.failed} failed` : '' })), 'No runs in this period.')}</div>
+          <div class="card viz"><div class="card-head"><h2>Most active people</h2></div>
+            ${bars(m.people.map(p => ({ label: `<a class="plain" href="${esc(listLink('runs', { user: p.user }))}">${who(p.user)}</a>`, value: p.runs, note: `${p.plans} plans · ${p.applies} applies` })), 'Nobody has run anything in this period.')}</div>
+          <div class="card viz"><div class="card-head"><h2>Engines</h2></div>
+            ${bars(m.engines.map(e => ({ label: esc(e.engine), value: e.n })), 'No runs in this period.')}</div>
+        </div>
+        <div class="grid3">
+          <div class="card"><div class="card-head"><h2>Run times</h2></div>
+            ${table(['', 'Runs', 'Median', 'p95', 'Slowest'], ['plan', 'apply'].map(k => {
+              const x = m.timing[k];
+              return `<tr><td><b>${k === 'plan' ? 'Plans' : 'Applies'}</b></td><td class="num">${fmt(x.count)}</td><td class="num">${secsText(x.p50)}</td><td class="num">${secsText(x.p95)}</td><td class="num">${secsText(x.max)}</td></tr>`;
+            }), 'No finished runs yet.')}</div>
+          <div class="card viz"><div class="card-head"><h2>Policy findings</h2><a href="${esc(listLink('audit', { tab: 'policy' }))}">${fmt(findings)} findings</a></div>
+            ${bars(['critical', 'high', 'medium', 'low'].filter(k => sev[k]).map(k => ({ label: `<span class="pill ${SEV_PILL[k] ?? ''}">${k}</span>`, value: sev[k], cls: `sev-${k}` })), 'No policy findings in this period.')}
+            ${m.policy.topRules.length ? `<div class="card-foot"><span class="muted small">Top rules: ${m.policy.topRules.slice(0, 4).map(x => `<b>${esc(x.rule)}</b> ${x.n}`).join(' · ')}</span></div>` : ''}</div>
+          <div class="card viz"><div class="card-head"><h2>Denied decisions</h2><a href="${esc(listLink('audit', { result: 'denied' }))}">${fmt(denied)} of ${fmt(m.decisions.total)}</a></div>
+            ${bars(m.decisions.denied.map(x => ({ label: `<span class="mono">${esc(x.action)}</span>`, value: x.n, cls: 'sev-high' })), 'Nothing was denied in this period.')}</div>
+        </div>
+        <div class="card">
+          <div class="card-head"><h2>Resource usage of runs</h2><span class="muted small">${m.usage.runs ? `${fmt(m.usage.runs)} runs measured · CPU and memory of Terraform and its providers` : 'measured on Linux (the container image)'}</span></div>
+          ${m.usage.runs ? `<div class="tiles hero inner">
+              ${tile(bytesText(m.usage.memory.p50), 'median peak memory', `p95 ${bytesText(m.usage.memory.p95)} · max ${bytesText(m.usage.memory.max)}`)}
+              ${tile(secsText(m.usage.cpu.p50), 'median CPU per run', `p95 ${secsText(m.usage.cpu.p95)}`)}
+              ${tile(secsText(m.usage.cpu.total), 'CPU used in total', period)}
+            </div>
+            ${table(['Heaviest runs', 'Pull request', 'Type', 'Peak memory', 'CPU', 'Processes', 'Took', 'By'], m.usage.heaviest.map(r => `<tr class="click" data-run="${r.id}">
+              <td class="mono">${projLink(r.project)}</td>
+              <td>${esc(repoName(r.repo))} <span class="muted">#${r.pr}</span></td>
+              <td>${esc(r.kind)}${r.status === 'failed' ? ' <span class="pill bad">failed</span>' : ''}</td>
+              <td class="num"><b>${bytesText(r.usage.peakMemory)}</b></td>
+              <td class="num">${secsText(r.usage.cpuSeconds)}</td>
+              <td class="num">${fmt(r.usage.peakProcesses)}</td>
+              <td class="num">${secsText(r.seconds)}</td>
+              <td>${who(r.user)}</td></tr>`), '')}`
+            : '<div class="empty">No runs measured yet in this period.</div>'}
+        </div>
+        <div class="grid3">
+          <div class="card"><div class="card-head"><h2>Locks and drift</h2></div>
+            <div class="kv">
+              <span>Projects locked now</span><span><a class="plain" href="#locks">${fmt(m.locks.n)}</a></span>
+              <span>Oldest lock</span><span>${m.locks.oldest ? ago(m.locks.oldest) : '—'}</span>
+              <span>Plans that destroy</span><span>${fmt(t.destroying)}</span>
+              <span>Drift checks</span><span>${fmt((drift.clean || 0) + (drift.drift || 0) + (drift.error || 0))}</span>
+              <span>Found drift</span><span>${drift.drift ? `<span class="pill warn">${fmt(drift.drift)}</span>` : '0'}</span>
+              <span>Checks that failed</span><span>${drift.error ? `<span class="pill bad">${fmt(drift.error)}</span>` : '0'}</span>
+            </div></div>
+          <div class="card"><div class="card-head"><h2>Server</h2><a href="/metrics" target="_blank" rel="noopener">Prometheus ↗</a></div>
+            <div class="kv">
+              <span>Version</span><span class="mono">${esc(m.server.version)}</span>
+              <span>Node.js</span><span class="mono">${esc(m.server.node)}</span>
+              <span>Up for</span><span>${secsText(m.server.uptime)} <span class="muted small">since ${esc(when(m.server.startedAt))}</span></span>
+              <span>Memory</span><span>${(m.server.memory / 1048576).toFixed(0)} MB</span>
+              <span>Runs going now</span><span>${m.server.queue ? fmt(m.server.queue.active) : '—'}</span>
+              <span>Runs waiting</span><span>${m.server.queue ? fmt(m.server.queue.waiting) : '—'}</span>
+              <span>Repositories</span><span>${fmt(t.repos)}</span>
+            </div></div>
+        </div>`;
+    },
   };
+
+  // ---- metrics helpers ------------------------------------------------------
+  const fmt = (n) => Number(n || 0).toLocaleString();
+  const secsText = (s) => {
+    if (s === null || s === undefined) return '—';
+    if (s > 0 && s < 10) return `${Math.round(s * 10) / 10}s`;
+    s = Math.round(s);
+    if (s < 60) return `${s}s`;
+    if (s < 3600) return `${Math.floor(s / 60)}m ${s % 60}s`;
+    if (s < 86400) return `${Math.floor(s / 3600)}h ${Math.floor((s % 3600) / 60)}m`;
+    return `${Math.floor(s / 86400)}d ${Math.floor((s % 86400) / 3600)}h`;
+  };
+  const bytesText = (b) => {
+    if (b === null || b === undefined) return '—';
+    if (b < 1048576) return `${Math.round(b / 1024)} KB`;
+    if (b < 1073741824) return `${Math.round(b / 1048576)} MB`;
+    return `${(b / 1073741824).toFixed(1)} GB`;
+  };
+  const tile = (n, k, sub, href, cls = '') => {
+    const inner = `<span class="n">${n}</span><span class="k">${esc(k)}</span>${sub ? `<span class="sub">${esc(sub)}</span>` : ''}`;
+    return href ? `<a class="tile ${cls}" href="${esc(href)}">${inner}</a>` : `<div class="tile ${cls}">${inner}</div>`;
+  };
+  // One entry per day of the period, zeros included, oldest first.
+  const dailySeries = (rows, days) => {
+    const out = new Map();
+    for (let i = days - 1; i >= 0; i--) {
+      const d = new Date(Date.now() - i * 864e5).toISOString().slice(0, 10);
+      out.set(d, { day: d, plans: 0, applies: 0, failed: 0 });
+    }
+    for (const r of rows) {
+      const d = out.get(r.day);
+      if (!d) continue;
+      d[r.kind === 'apply' ? 'applies' : 'plans'] += r.n;
+      if (r.status === 'failed') d.failed += r.n;
+    }
+    return [...out.values()];
+  };
+  // Every day from `from` to `to` (inclusive), zeros included. Capped so a long range stays readable.
+  const dailySeriesBetween = (rows, from, to) => {
+    const out = new Map();
+    const start = new Date(`${from}T12:00:00Z`).getTime();
+    const end = new Date(`${to}T12:00:00Z`).getTime();
+    for (let t = start; t <= end && out.size < 1100; t += 864e5) {
+      const d = new Date(t).toISOString().slice(0, 10);
+      out.set(d, { day: d, plans: 0, applies: 0, failed: 0 });
+    }
+    for (const r of rows) {
+      const d = out.get(r.day);
+      if (!d) continue;
+      d[r.kind === 'apply' ? 'applies' : 'plans'] += r.n;
+      if (r.status === 'failed') d.failed += r.n;
+    }
+    return [...out.values()];
+  };
+  const dayLabel = (d) => new Date(`${d}T12:00:00`).toLocaleDateString([], { month: 'short', day: 'numeric' });
+  // Stacked columns, one per day: thin marks, 2px gaps, rounded top, recessive grid.
+  let chartData = [];
+  const columnChart = (series, keys, label, height = 190) => {
+    // Drawn at the page's real width, so text stays 11px instead of scaling with the SVG.
+    const W = Math.max(320, Math.round(view.clientWidth - 34)), H = height, L = 30, B = 22, T = 8;
+    const totals = series.map(d => keys.reduce((a, [k]) => a + d[k], 0));
+    const top = Math.max(1, ...totals);
+    const step = top <= 4 ? 1 : Math.ceil(top / 4 / (top > 40 ? 10 : 1)) * (top > 40 ? 10 : 1);
+    const max = Math.ceil(top / step) * step;
+    const y = (v) => T + (H - T - B) * (1 - v / max);
+    const slot = (W - L) / series.length;
+    const bw = Math.max(2, Math.min(28, slot - 2));
+    const id = chartData.push({ series, keys }) - 1;
+    let out = `<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="${esc(label)}">`;
+    for (let v = 0; v <= max; v += step) {
+      out += `<line class="gridline" x1="${L}" x2="${W}" y1="${y(v)}" y2="${y(v)}"/><text class="axis" x="${L - 6}" y="${y(v) + 4}" text-anchor="end">${v}</text>`;
+    }
+    const every = Math.ceil(series.length / Math.max(3, Math.floor(W / 90)));
+    series.forEach((d, i) => {
+      const x = L + i * slot + (slot - bw) / 2;
+      let base = 0;
+      let marks = '';
+      keys.forEach(([k, cls], j) => {
+        const v = d[k];
+        if (!v) return;
+        const y0 = y(base), y1 = y(base + v);
+        const isTop = keys.slice(j + 1).every(([k2]) => !d[k2]);
+        const h = Math.max(1, y0 - y1 - (base > 0 ? 2 : 0)); // 2px surface gap between stacked segments
+        const yy = y0 - (base > 0 ? 2 : 0) - h;
+        const r = isTop ? Math.min(4, bw / 2, h) : 0;
+        marks += r
+          ? `<path class="col ${cls}" d="M${x},${yy + h} V${yy + r} Q${x},${yy} ${x + r},${yy} H${x + bw - r} Q${x + bw},${yy} ${x + bw},${yy + r} V${yy + h} Z"/>`
+          : `<rect class="col ${cls}" x="${x}" y="${yy}" width="${bw}" height="${h}"/>`;
+        base += v;
+      });
+      out += `<rect class="hit" x="${L + i * slot}" y="${T}" width="${slot}" height="${H - T - B}" data-chart="${id}" data-i="${i}"/><g>${marks}</g>`;
+      if (i % every === 0) out += `<text class="axis" x="${L + i * slot + slot / 2}" y="${H - 6}" text-anchor="middle">${esc(dayLabel(d.day))}</text>`;
+    });
+    return `${out}</svg>`;
+  };
+  // Horizontal bars in HTML; widths are applied after render (no inline styles under the CSP).
+  const bars = (rows, empty) => {
+    if (!rows.length) return `<div class="empty">${empty}</div>`;
+    const max = Math.max(...rows.map(r => r.value));
+    return `<div class="bars">${rows.map(r => `<div class="bar-row"><span class="label">${r.label}</span>
+      <span class="bar-track"><span class="bar-fill ${r.cls || ''}" data-w="${Math.round((r.value / max) * 1000) / 10}"></span></span>
+      <span class="val">${fmt(r.value)}${r.note ? ` <small>${esc(r.note)}</small>` : ''}</span></div>`).join('')}</div>`;
+  };
+  const tableView = (head, rows) => rows.length
+    ? `<details class="table-view"><summary>Show as a table</summary>${table(head, rows.map(r => `<tr>${r.map(c => `<td class="num">${esc(c)}</td>`).join('')}</tr>`), '')}</details>` : '';
+  const sizeBars = () => document.querySelectorAll('.bar-fill[data-w]').forEach(el => { el.style.width = `${el.dataset.w}%`; });
+
+  // Tooltip for the day columns.
+  const tip = $('#tip');
+  view.addEventListener('mousemove', (e) => {
+    const hit = e.target.closest?.('rect.hit');
+    document.querySelectorAll('.chart g.on').forEach(g => g.classList.remove('on'));
+    if (!hit) { tip.hidden = true; return; }
+    const { series, keys } = chartData[Number(hit.dataset.chart)] || {};
+    const d = series?.[Number(hit.dataset.i)];
+    if (!d) return;
+    hit.nextElementSibling?.classList.add('on');
+    tip.innerHTML = `<b>${esc(new Date(`${d.day}T12:00:00`).toLocaleDateString([], { weekday: 'short', month: 'short', day: 'numeric' }))}</b>${
+      keys.map(([k, cls, name]) => `<div class="row"><span><i class="key ${cls}"></i>${esc(name)}</span><b>${fmt(d[k])}</b></div>`).join('')}${
+      keys.some(([k]) => k === 'failed') ? '' : `<div class="row"><span>Failed</span><b>${fmt(d.failed)}</b></div>`}`;
+    tip.hidden = false;
+    const x = Math.min(window.innerWidth - tip.offsetWidth - 12, e.clientX + 14);
+    tip.style.left = `${x}px`;
+    tip.style.top = `${Math.max(8, e.clientY - tip.offsetHeight - 12)}px`;
+  });
+  view.addEventListener('mouseleave', () => { tip.hidden = true; });
 
   // Who has been planning and applying, most active first.
   function peopleTable(runs) {
@@ -393,10 +818,26 @@
     <td class="mono">${projLink(a.project)}</td><td>${prLink(a)}</td>
     <td class="wrap">${a.allowed ? '<span class="pill ok">allowed</span>' : `<span class="pill bad">denied</span> <span class="muted">${esc(a.reason.replace(/`/g, ''))}</span>`}</td>
   </tr>`;
+  const SEV_PILL = { critical: 'bad', high: 'bad', medium: 'warn', low: '' };
+  const findingRow = (x) => `<tr>
+    <td class="muted" title="${esc(when(x.at))}">${ago(x.at)}</td>
+    <td><span class="pill ${SEV_PILL[x.severity] ?? ''}">${esc(x.severity)}</span></td>
+    <td><b>${esc(x.rule)}</b></td>
+    <td class="mono">${projLink(x.project)}</td>
+    <td class="mono wrap">${esc(x.address)}</td>
+    <td class="wrap">${esc(String(x.message).split('\n')[0].slice(0, 240))}</td>
+    <td>${x.mode === 'enforce' ? '<span class="pill bad">enforced</span>' : '<span class="pill">audit</span>'}</td>
+    <td>${prLink(x)}</td>
+    <td>${who(x.user, x.links?.user, null, x.links?.userAvatar)}</td>
+  </tr>`;
   const LISTS = {
     runs: {
       url: '/api/runs/search', keys: ['q', 'user', 'project', 'status', 'kind', 'sort'], noun: ['run', 'runs'],
       head: ['Result', 'Project', 'Changes', 'Pull request', 'People', 'Engine', 'When'], row: runRow, empty: 'No runs match these filters.',
+    },
+    policy: {
+      url: '/api/policy/search', keys: ['q', 'project', 'rule', 'severity', 'mode'], noun: ['finding', 'findings'],
+      head: ['When', 'Severity', 'Rule', 'Project', 'Resource', 'Finding', 'Mode', 'Pull request', 'Planned by'], row: findingRow, empty: 'No policy findings match these filters.',
     },
     audit: {
       url: '/api/audit/search', keys: ['q', 'user', 'project', 'action', 'result'], noun: ['decision', 'decisions'],
@@ -404,20 +845,21 @@
     },
   };
   let listState = null;
-  const loadList = async (name, params, append = false) => {
+  // The Audit page shows decisions or policy findings, depending on its tab.
+  const listName = (view, params) => (view === 'audit' && params.get('tab') === 'policy' ? 'policy' : LISTS[view] ? view : null);
+  const loadList = async (name, params) => {
     const L = LISTS[name];
     const box = $('#results');
     if (!L || !box) return;
-    const offset = append ? listState.items.length : 0;
+    const { size, offset } = pageOf(params);
     const q = apiParams(params, L.keys);
-    q.set('limit', '50');
+    q.set('limit', String(size));
     q.set('offset', String(offset));
     const data = await api(`${L.url}?${q}`);
-    listState = { name, total: data.total, items: append ? [...listState.items, ...data.items] : data.items };
-    const more = listState.items.length < listState.total;
-    box.innerHTML = `<div class="card-head"><h2>${listState.total} ${L.noun[listState.total === 1 ? 0 : 1]}</h2><span class="muted small">showing ${listState.items.length}</span></div>
-      ${table(L.head, listState.items.map(L.row), L.empty)}
-      ${more ? '<div class="more"><button type="button" class="ghost" data-more="1">Load more</button></div>' : ''}`;
+    listState = { name, total: data.total, items: data.items };
+    box.innerHTML = `<div class="card-head"><h2>${fmtN(data.total)} ${L.noun[data.total === 1 ? 0 : 1]}</h2></div>
+      ${table(L.head, data.items.map(L.row), L.empty)}
+      ${data.total ? pager(data.total, params) : ''}`;
     $('#chips').innerHTML = chips(params);
   };
 
@@ -431,12 +873,17 @@
   };
   const route = async () => {
     if (!me) return;
+    if (picker.el) closePicker(); // a popup belongs to the page it was opened on
     const { name, arg, params } = current();
     const viewName = views[name] ? name : 'overview';
     document.querySelectorAll('#nav a').forEach(a => a.classList.toggle('active', a.dataset.view === viewName));
     try {
+      chartData = [];
+      tip.hidden = true;
       view.innerHTML = await (viewName === 'runs' && arg ? views.run(arg) : views[viewName](arg, params));
-      if (LISTS[viewName] && !arg) await loadList(viewName, params);
+      sizeBars();
+      const list = listName(viewName, params);
+      if (list && !arg) await loadList(list, params);
       $('#refreshed').textContent = `Updated ${new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })}`;
     } catch (err) {
       if (err.message !== 'unauthorized') view.innerHTML = `<div class="card"><div class="empty error">Could not load this page: ${esc(err.message)}</div></div>`;
@@ -451,8 +898,9 @@
     if (name === 'runs' && arg) return;
     timer = setTimeout(async () => {
       const c = current();
-      if (LISTS[c.name] && !c.arg && $('#results')) {
-        await loadList(c.name, c.params).catch(() => {});
+      const list = listName(c.name, c.params);
+      if (list && !c.arg && $('#results')) {
+        await loadList(list, c.params).catch(() => {});
         schedule();
       } else route();
     }, 15000);
@@ -464,7 +912,8 @@
     const hash = `#${name}${[...params.keys()].length ? `?${params}` : ''}`;
     if (full) { location.hash = hash; return; }
     history.replaceState(null, '', hash);
-    if (LISTS[name]) loadList(name, params).catch(() => {});
+    const list = listName(name, params);
+    if (list) loadList(list, params).catch(() => {});
     else route();
   };
   let typing = null;
@@ -473,10 +922,20 @@
     if (!form) return;
     const { name, params } = current();
     params.set(e.target.name, e.target.value);
+    params.delete('page'); // new filters start at the first page
     if (e.target.name === 'q') {
       clearTimeout(typing);
       typing = setTimeout(() => setParams(name, params, name === 'projects'), 300);
     } else setParams(name, params, name === 'projects');
+  });
+  view.addEventListener('change', (e) => {
+    if (!e.target.matches('select[data-size]')) return;
+    const { name, params } = current();
+    params.set('size', e.target.value);
+    savedSize = Number(e.target.value);
+    params.delete('page');
+    try { localStorage.setItem('tfv-page-size', e.target.value); } catch { /* ignore */ }
+    setParams(name, params, name === 'projects');
   });
   view.addEventListener('submit', (e) => { if (e.target.closest('form.filters')) e.preventDefault(); });
 
@@ -485,46 +944,129 @@
     if (row && !e.target.closest('a,button')) { location.hash = `runs/${row.dataset.run}`; return; }
     const linkRow = e.target.closest('tr[data-href]');
     if (linkRow && !e.target.closest('a,button')) { location.hash = linkRow.dataset.href; return; }
+    const trig = e.target.closest('button[data-picker]');
+    if (trig) {
+      openPicker(trig, (from, to) => {
+        const { name, params } = current();
+        params.set('from', from);
+        params.set('to', to);
+        params.delete('page');
+        if (trig.dataset.picker === 'metrics') { params.set('days', 'custom'); location.hash = `#metrics?${params}`; return; }
+        params.set('range', 'custom');
+        setParams(name, params, true);
+      });
+      return;
+    }
     const range = e.target.closest('button[data-range]');
     if (range) {
       const { name, params } = current();
       params.set('range', range.dataset.range);
+      params.delete('page');
       if (range.dataset.range !== 'custom') { params.delete('from'); params.delete('to'); }
       document.querySelectorAll('button[data-range]').forEach(b => b.setAttribute('aria-pressed', String(b === range)));
       document.querySelector('.f.custom').hidden = range.dataset.range !== 'custom';
+      // Custom: choose the dates first.
+      if (range.dataset.range === 'custom' && !(params.get('from') && params.get('to'))) {
+        document.querySelector('.f.custom [data-picker]')?.click();
+        return;
+      }
       setParams(name, params);
       return;
     }
     const clear = e.target.closest('button[data-clear]');
     if (clear) {
       const { name, params } = current();
-      const keep = clear.dataset.clear === '*' ? new URLSearchParams(params.get('sort') ? { sort: params.get('sort') } : {}) : params;
+      const keep = clear.dataset.clear === '*'
+        ? new URLSearchParams(Object.fromEntries(['sort', 'tab', 'size'].filter(k => params.get(k)).map(k => [k, params.get(k)])))
+        : params;
+      keep.delete('page');
       if (clear.dataset.clear !== '*') { keep.delete(clear.dataset.clear); if (clear.dataset.clear === 'range') { keep.delete('from'); keep.delete('to'); } }
       setParams(name, keep, true);
       return;
     }
-    if (e.target.closest('button[data-more]')) {
+    const pageBtn = e.target.closest('button[data-page]');
+    if (pageBtn) {
       const { name, params } = current();
-      e.target.closest('button[data-more]').disabled = true;
-      await loadList(name, params, true).catch(() => {});
+      params.set('page', pageBtn.dataset.page);
+      setParams(name, params, name === 'projects');
+      $('#results, #view')?.scrollIntoView({ block: 'start' });
+      return;
+    }
+    const daysBtn = e.target.closest('button[data-days]');
+    if (daysBtn) {
+      const { params } = current();
+      params.set('days', daysBtn.dataset.days);
+      if (daysBtn.dataset.days !== 'custom') { params.delete('from'); params.delete('to'); }
+      else if (!params.get('from')) {
+        // Default to the last 30 days, then let the user change it.
+        params.set('from', iso(new Date(Date.now() - 29 * 864e5)));
+        params.set('to', iso(new Date()));
+        location.hash = `#metrics?${params}`;
+        setTimeout(() => document.querySelector('[data-picker="metrics"]')?.click(), 350);
+        return;
+      }
+      location.hash = `#metrics?${params}`;
       return;
     }
     const unlock = e.target.closest('button[data-unlock]');
     if (unlock) {
-      if (unlock.dataset.confirm !== 'yes') { unlock.dataset.confirm = 'yes'; unlock.textContent = 'Click again to unlock'; return; }
+      const l = JSON.parse(unlock.dataset.unlock);
+      const ok = await confirmDialog({
+        title: `Unlock ${l.project}?`,
+        body: `<div class="facts">
+            <span>Project</span><span class="mono">${esc(l.project)}${l.workspace !== 'default' ? ` @${esc(l.workspace)}` : ''}</span>
+            <span>Held by</span><span>${l.prUrl ? ext(l.prUrl, `${esc(repoName(l.repo))} #${l.pr}`, 'plain') : `${esc(repoName(l.repo))} #${l.pr}`} · ${esc(l.user)}</span>
+            <span>Since</span><span>${esc(ago(l.createdAt))}</span>
+          </div>
+          <ul>
+            <li>The plan PR #${l.pr} made for this project is discarded; it must plan again before applying.</li>
+            <li>Another pull request can then plan and apply this project.</li>
+            <li>A comment on PR #${l.pr} says who unlocked it, and this is recorded in the audit log.</li>
+          </ul>`,
+        ok: 'Unlock', danger: true,
+      });
+      if (!ok) return;
       unlock.disabled = true;
-      await api('/api/locks/unlock', { method: 'POST', body: unlock.dataset.unlock }).catch(err => alertRow(unlock, err));
+      try {
+        const r = await api('/api/locks/unlock', { method: 'POST', body: JSON.stringify({ repo: l.repo, project: l.project, workspace: l.workspace }) });
+        toast(r.notified ? `Unlocked ${l.project}. PR #${l.pr} was told.` : `Unlocked ${l.project}. Could not comment on PR #${l.pr}; see the server log.`, !r.notified);
+      } catch (err) {
+        toast(`Could not unlock: ${err.message}`, true);
+      }
       return route();
     }
     const run = e.target.closest('button[data-drift]');
     if (run) {
       run.disabled = true;
       await api(`/api/drift/run?key=${encodeURIComponent(run.dataset.drift)}`, { method: 'POST' })
-        .then(() => { run.textContent = 'Started'; })
+        .then(() => { run.textContent = 'Started'; toast('Drift check started. Results appear here when it finishes.'); })
         .catch(err => alertRow(run, err));
     }
   });
   const alertRow = (btn, err) => { btn.textContent = err.message; btn.disabled = false; };
+
+  // ---- dialog and toast -------------------------------------------------------
+  const modal = $('#modal');
+  const confirmDialog = ({ title, body, ok, danger }) => new Promise((resolve) => {
+    $('#modal-title').textContent = title;
+    $('#modal-body').innerHTML = body;
+    const okBtn = $('#modal-ok');
+    okBtn.textContent = ok;
+    okBtn.className = danger ? 'danger' : '';
+    modal.returnValue = '';
+    modal.addEventListener('close', () => resolve(modal.returnValue === 'ok'), { once: true });
+    modal.showModal();
+    modal.querySelector('button[value="cancel"]').focus(); // the safe choice first
+  });
+  let toastTimer = null;
+  const toast = (text, bad = false) => {
+    const el = $('#toast');
+    el.textContent = text;
+    el.className = `toast${bad ? ' bad' : ''}`;
+    el.hidden = false;
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(() => { el.hidden = true; }, 6000);
+  };
 
   // ---- theme ------------------------------------------------------------------
   const THEMES = ['system', 'light', 'dark'];
@@ -549,11 +1091,13 @@
   // ---- sign-in ------------------------------------------------------------
   const signedIn = (who) => {
     me = who;
+    document.body.classList.remove('signed-out');
     $('#signin').hidden = true;
     $('#signout').hidden = false;
     const el = $('#me');
     el.hidden = false;
-    el.innerHTML = `<b>${esc(who.name)}</b> <span class="pill ${who.role === 'admin' ? 'run' : ''}">${esc(who.role)}</span>`;
+    el.innerHTML = `${avatar(who.name)}<span class="who-name"><b>${esc(who.name)}</b><span class="muted small">${esc(who.role)} · ${esc(who.via || '')}</span></span>`;
+    $('#version').textContent = who.version ? `v${who.version}` : '';
     const conn = $('#connected');
     const ps = who.platforms || [];
     conn.hidden = !ps.length;
@@ -564,6 +1108,7 @@
 
   async function showSignIn(message) {
     me = null;
+    document.body.classList.add('signed-out');
     clearTimeout(timer);
     view.innerHTML = '';
     $('#signin').hidden = false;

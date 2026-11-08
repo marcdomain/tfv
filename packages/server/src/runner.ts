@@ -1,6 +1,7 @@
 // Runs plan / apply for one project with the exact tool versions it pins.
+import { UsageSampler, combineUsage, type Usage } from './usage.ts';
 import { spawn } from 'node:child_process';
-import { mkdirSync, existsSync, rmSync } from 'node:fs';
+import { mkdirSync, existsSync, rmSync, writeFileSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import type { Project } from './discovery.ts';
 import type { Provider } from './tfv.ts';
@@ -65,13 +66,14 @@ export const engineLabel = (t: ToolSet) =>
 
 const MAX_OUTPUT = 4 * 1024 * 1024;
 
-interface ExecResult { code: number; output: string; stdout: string }
+interface ExecResult { code: number; output: string; stdout: string; usage?: Usage | null }
 
 export const exec = (
   binary: string, args: string[], cwd: string, env: NodeJS.ProcessEnv,
-  opts: { timeoutMs: number; captureStdout?: boolean; onOutput?: (chunk: string) => void },
+  opts: { timeoutMs: number; captureStdout?: boolean; onOutput?: (chunk: string) => void; measure?: boolean },
 ): Promise<ExecResult> => new Promise((resolve) => {
   const child = spawn(binary, args, { cwd, env, stdio: ['ignore', 'pipe', 'pipe'] });
+  const sampler = opts.measure && child.pid ? new UsageSampler(child.pid) : null;
   let output = '';
   let stdout = '';
   const add = (chunk: Buffer, isStdout: boolean) => {
@@ -88,8 +90,8 @@ export const exec = (
     child.kill('SIGTERM');
     setTimeout(() => child.kill('SIGKILL'), 10_000).unref();
   }, opts.timeoutMs);
-  child.on('error', err => { clearTimeout(timer); resolve({ code: 127, output: `${output}\n${err.message}`, stdout }); });
-  child.on('close', code => { clearTimeout(timer); resolve({ code: code ?? 1, output: redact(output), stdout }); });
+  child.on('error', err => { clearTimeout(timer); sampler?.stop(); resolve({ code: 127, output: `${output}\n${err.message}`, stdout }); });
+  child.on('close', code => { clearTimeout(timer); resolve({ code: code ?? 1, output: redact(output), stdout, usage: sampler?.stop() ?? null }); });
 });
 
 // Env for terraform/terragrunt: the server's env minus its own settings and
@@ -125,6 +127,9 @@ export interface PlanResult {
   output: string;
   summary: PlanSummary | null;
   hasChanges: boolean;
+  plan?: Record<string, any>;  // full `show -json` output
+  planJsonPath?: string;       // the same, written next to the plan file
+  usage?: Usage | null;        // CPU and memory of the whole run
 }
 
 const steps = (ctx: RunContext) => {
@@ -136,9 +141,11 @@ const steps = (ctx: RunContext) => {
   const bin = tools.terragrunt?.binary ?? tools.tool.binary;
   // Server paths mean nothing to PR readers: show the plan as "tfplan", the checkout as ".".
   const tidy = (text: string) => text.split(ctx.planPath).join('tfplan').split(ctx.root).join('.');
+  let usage: Usage | null = null;
   const run = async (args: string[], log: string[], captureStdout = false) => {
     log.push(tidy(`$ ${tools.terragrunt ? 'terragrunt' : tools.tool.provider === 'opentofu' ? 'tofu' : 'terraform'} ${args.join(' ')}`));
-    const r = await exec(bin, args, cwd, env, { timeoutMs: ctx.timeoutMs, captureStdout, onOutput: ctx.onOutput });
+    const r = await exec(bin, args, cwd, env, { timeoutMs: ctx.timeoutMs, captureStdout, onOutput: ctx.onOutput, measure: true });
+    usage = combineUsage(usage, r.usage ?? null);
     if (r.output.trim()) log.push(tidy(r.output.trimEnd()));
     return r;
   };
@@ -154,20 +161,21 @@ const steps = (ctx: RunContext) => {
     }
     return true;
   };
-  return { run, prepare };
+  return { run, prepare, usage: () => usage };
 };
 
-export const plan = async (ctx: RunContext, opts: { destroy?: boolean; targets?: string[]; extraArgs?: string[]; refreshOnly?: boolean; noLock?: boolean } = {}): Promise<PlanResult> => {
+export const plan = async (ctx: RunContext, opts: { destroy?: boolean; targets?: string[]; extraArgs?: string[]; refreshOnly?: boolean; replace?: string[]; noLock?: boolean } = {}): Promise<PlanResult> => {
   const log: string[] = [];
-  const { run, prepare } = steps(ctx);
+  const { run, prepare, usage } = steps(ctx);
   mkdirSync(dirname(ctx.planPath), { recursive: true });
   if (existsSync(ctx.planPath)) rmSync(ctx.planPath);
 
-  if (!(await prepare(log))) return { ok: false, output: log.join('\n'), summary: null, hasChanges: false };
+  if (!(await prepare(log))) return { ok: false, output: log.join('\n'), summary: null, hasChanges: false, usage: usage() };
 
   const args = ['plan', '-input=false', '-no-color', '-detailed-exitcode', `-out=${ctx.planPath}`];
   if (opts.destroy) args.push('-destroy');
   for (const t of opts.targets ?? []) args.push(`-target=${t}`);
+  for (const r of opts.replace ?? []) args.push(`-replace=${r}`);
   // Drift checks only read: -refresh-only finds changes made outside Terraform,
   // and -lock=false keeps them from blocking a PR's apply.
   if (opts.refreshOnly) args.push('-refresh-only');
@@ -175,26 +183,46 @@ export const plan = async (ctx: RunContext, opts: { destroy?: boolean; targets?:
   args.push(...(opts.extraArgs ?? []));
   const p = await run(args, log);
   // -detailed-exitcode: 0 no changes, 2 changes, anything else failed.
-  if (p.code !== 0 && p.code !== 2) return { ok: false, output: log.join('\n'), summary: null, hasChanges: false };
+  if (p.code !== 0 && p.code !== 2) return { ok: false, output: log.join('\n'), summary: null, hasChanges: false, usage: usage() };
 
   const show = await run(['show', '-json', ctx.planPath], [], true);
   let summary: PlanSummary | null = null;
+  let parsed: Record<string, any> | undefined;
+  let planJsonPath: string | undefined;
   try {
     // Terragrunt may print log lines before the JSON.
     const json = show.stdout.slice(show.stdout.indexOf('{'));
-    summary = summarizePlan(JSON.parse(json));
+    parsed = JSON.parse(json);
+    summary = summarizePlan(parsed!);
+    planJsonPath = `${ctx.planPath}.json`;
+    writeFileSync(planJsonPath, json);
   } catch {
     log.push('[tfv] could not read the plan as JSON; showing raw output only');
   }
   const hasChanges = summary ? !summary.noChanges : p.code === 2;
-  return { ok: true, output: log.join('\n'), summary, hasChanges };
+  return { ok: true, output: log.join('\n'), summary, hasChanges, plan: parsed, planJsonPath, usage: usage() };
 };
 
-export const apply = async (ctx: RunContext): Promise<{ ok: boolean; output: string }> => {
+export const apply = async (ctx: RunContext): Promise<{ ok: boolean; output: string; usage?: Usage | null }> => {
+  const log: string[] = [];
+  const { run, prepare, usage } = steps(ctx);
+  if (!existsSync(ctx.planPath)) return { ok: false, output: 'The saved plan is gone; run plan again.' };
+  if (!(await prepare(log))) return { ok: false, output: log.join('\n'), usage: usage() };
+  const r = await run(['apply', '-input=false', '-no-color', ctx.planPath], log);
+  return { ok: r.code === 0, output: log.join('\n'), usage: usage() };
+};
+
+// One Terraform command in a prepared project (init and workspace done first):
+// state list/show/rm/mv, output, show, validate, providers, fmt, import, taint, force-unlock.
+// Only the command's own output is returned, unless preparing failed.
+export const runTool = async (ctx: RunContext, args: string[]): Promise<{ ok: boolean; code: number; output: string }> => {
+  const prep: string[] = [];
   const log: string[] = [];
   const { run, prepare } = steps(ctx);
-  if (!existsSync(ctx.planPath)) return { ok: false, output: 'The saved plan is gone; run plan again.' };
-  if (!(await prepare(log))) return { ok: false, output: log.join('\n') };
-  const r = await run(['apply', '-input=false', '-no-color', ctx.planPath], log);
-  return { ok: r.code === 0, output: log.join('\n') };
+  if (!(await prepare(prep))) return { ok: false, code: 1, output: prep.join('\n') };
+  const r = await run(args, log);
+  // Commands print colour even without a terminal; PR comments can't show it.
+  const output = log.join('\n').replace(/\x1b\[[0-9;]*m/g, '');
+  return { ok: r.code === 0, code: r.code, output };
 };
+

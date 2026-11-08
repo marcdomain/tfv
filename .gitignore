@@ -1,2 +1,5 @@
 node_modules
 .vscode
+
+# Local end-to-end tests (personal accounts and secrets; never committed or shipped)
+local-test/

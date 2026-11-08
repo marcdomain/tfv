@@ -9,3 +9,4 @@ packages/server/test
 demo.gif
 demo.tape
 *.md
+local-test

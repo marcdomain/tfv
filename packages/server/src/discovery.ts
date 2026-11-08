@@ -1,6 +1,6 @@
 // Finds terraform / opentofu / terragrunt projects in a checkout and works
-// out which ones a PR affects. No config needed; tfv.yaml / atlantis.yaml
-// projects are merged on top.
+// out which ones a PR affects. No config needed; tfv.yaml projects are
+// merged on top.
 import { readdirSync, readFileSync, existsSync, lstatSync } from 'node:fs';
 import { join, posix } from 'node:path';
 import type { RepoConfig, ProjectConfig } from './repoConfig.ts';
@@ -15,7 +15,7 @@ export interface Project {
   engine: Provider;               // terragrunt, or the plain tool
   tool: 'terraform' | 'opentofu'; // what actually plans (terragrunt drives it)
   autoplan: boolean;
-  whenModified?: string[];
+  watch: string[];                // repo-relative globs that also replan this project
   version?: string;
   terragruntVersion?: string;
   deps: string[];                 // repo-relative dirs/files whose changes affect it
@@ -81,9 +81,6 @@ const walk = (root: string): Map<string, DirInfo> => {
 };
 
 const LOCAL_SOURCE = /source\s*=\s*"(\.{1,2}\/[^"?]*)/g;
-const CONFIG_PATH = /config_path\s*=\s*"([^"]+)"/g;
-const DEP_PATHS = /paths\s*=\s*\[([^\]]*)\]/g;
-const RELATIVE_FILE = /"(\.{1,2}\/[^"]+\.(?:hcl|tfvars|json|ya?ml))"/g;
 
 const allMatches = (re: RegExp, text: string): string[] => [...text.matchAll(re)].map(m => m[1]);
 
@@ -97,14 +94,212 @@ const moduleSources = (root: string, info: DirInfo): string[] => {
       if (r) out.push(r);
     }
   }
-  if (info.terragrunt) {
-    for (const s of allMatches(LOCAL_SOURCE, info.terragrunt)) {
-      const r = resolveRel(info.dir, s);
-      if (r) out.push(r);
-    }
+  return out;
+};
+
+// ---- Terragrunt references ----------------------------------------------------
+// What a unit's config pulls in: dependencies, includes, read_terragrunt_config,
+// file(), terraform sources, hook scripts, and any path listed in a local:
+// every path in the config counts.
+// Path functions are resolved the way Terragrunt does, relative to the unit:
+//   get_terragrunt_dir(), get_repo_root(), get_parent_terragrunt_dir(),
+//   path.module, find_in_parent_folders("name").
+// Included .hcl files are followed too (e.g. _envcommon/app.hcl and the modules it uses).
+
+const ROOT = '\u0000R';       // marks a path that starts at the repo root
+const FILE_EXT = /\.(hcl|tfvars|json|ya?ml|tf|tofu|tpl|sh|txt|pem|cfg|conf|ini|xml|toml)$/i;
+
+const exists = (root: string, rel: string) => existsSync(rel === '.' ? root : join(root, rel));
+
+// Nearest folder at or above `dir` holding `name`, as a repo-relative path.
+const findUp = (root: string, dir: string, name: string): string | null => {
+  for (const d of [dir, ...parentDirs(dir)]) {
+    const candidate = d === '.' ? name : posix.join(d, name);
+    if (exists(root, candidate)) return candidate;
+  }
+  return null;
+};
+
+// Replaces ${local.name} with the local's value when it is a plain string
+// (after function expansion), so paths built from locals are found too.
+const expandLocals = (text: string): string => {
+  let out = text;
+  for (let pass = 0; pass < 3; pass++) {
+    const values = new Map<string, string>();
+    for (const m of out.matchAll(/^\s*([A-Za-z_][\w-]*)\s*=\s*"([^"\n]*)"\s*$/gm)) values.set(m[1], m[2]);
+    const next = out.replace(/\$\{\s*local\.([A-Za-z_][\w-]*)\s*\}/g, (whole, name: string) => values.get(name) ?? whole);
+    if (next === out) break;
+    out = next;
   }
   return out;
 };
+
+const expandFunctions = (text: string, root: string, unitDir: string): string => {
+  const parentDir = (() => {
+    for (const d of parentDirs(unitDir)) {
+      if (exists(root, d === '.' ? 'root.hcl' : posix.join(d, 'root.hcl')) || exists(root, d === '.' ? 'terragrunt.hcl' : posix.join(d, 'terragrunt.hcl'))) return d;
+    }
+    return '.';
+  })();
+  const at = (d: string) => `${ROOT}/${d === '.' ? '' : d}`.replace(/\/+$/, '');
+  return text
+    // find_in_parent_folders searches from the unit's parent folder upwards.
+    .replace(/find_in_parent_folders\(\s*(?:"([^"]*)")?\s*(?:,[^)]*)?\)/g, (_m, name: string | undefined) => {
+      const start = unitDir === '.' ? '.' : (posix.dirname(unitDir) === '' ? '.' : posix.dirname(unitDir));
+      const hit = findUp(root, start, name || 'terragrunt.hcl');
+      return hit ? `"${ROOT}/${hit}"` : '""';
+    })
+    .replace(/\$\{\s*get_terragrunt_dir\(\s*\)\s*\}/g, at(unitDir))
+    .replace(/\$\{\s*path\.module\s*\}/g, at(unitDir))
+    .replace(/\$\{\s*get_parent_terragrunt_dir\(\s*\)\s*\}/g, at(parentDir))
+    .replace(/\$\{\s*get_repo_root\(\s*\)\s*\}/g, ROOT);
+};
+
+// A quoted string from config as a repo-relative path, or null.
+const toRepoPath = (raw: string, fromDir: string): string | null => {
+  let v = raw.replace(/\?ref=.*$/, '');
+  if (/^[a-z]+::|:\/\/|\$\{/.test(v) || !v) return null;   // remote sources, unresolved interpolation
+  v = v.replace(/(?<!:)\/\/+/g, '/');                      // "modules//app" means the app folder
+  if (v.startsWith(ROOT)) {
+    const r = posix.normalize(v.slice(ROOT.length).replace(/^\/+/, '')) || '.';
+    return r.startsWith('..') ? null : r.replace(/\/+$/, '') || '.';
+  }
+  if (v.startsWith('./') || v.startsWith('../') || (v.includes('/') && !v.startsWith('/')) || FILE_EXT.test(v)) {
+    return resolveRel(fromDir, v);
+  }
+  return null;
+};
+
+export const terragruntRefs = (root: string, unitDir: string, text: string, seen = new Set<string>()): { files: Set<string>; dirs: Set<string> } => {
+  const files = new Set<string>();
+  const dirs = new Set<string>();
+  const expanded = expandLocals(expandFunctions(text, root, unitDir));
+  for (const m of expanded.matchAll(/"([^"\n]*)"/g)) {
+    const path = toRepoPath(m[1], unitDir);
+    if (!path || path === unitDir || !exists(root, path)) continue;
+    if (lstatSync(path === '.' ? root : join(root, path)).isDirectory()) {
+      // A parent folder (or the repo root) used to build other paths isn't a dependency.
+      if (path === '.' || unitDir === path || unitDir.startsWith(`${path}/`)) continue;
+      dirs.add(path);
+    } else {
+      if (path === posix.join(unitDir, 'terragrunt.hcl')) continue;
+      files.add(path);
+      // Included config is evaluated in the unit's context: follow it.
+      if (path.endsWith('.hcl') && !seen.has(path)) {
+        seen.add(path);
+        const nested = terragruntRefs(root, unitDir, readFileSync(join(root, path), 'utf-8'), seen);
+        nested.files.forEach(f => files.add(f));
+        nested.dirs.forEach(d => dirs.add(d));
+      }
+    }
+  }
+  return { files, dirs };
+};
+
+// ---- dependency blocks -------------------------------------------------------------
+
+export interface TgDependency { name: string; dir: string; mocks: string[] }
+
+// The block body after `start` (index of its opening brace), by counting braces.
+const blockBody = (text: string, start: number): string => {
+  let depth = 0;
+  for (let i = start; i < text.length; i++) {
+    if (text[i] === '{') depth++;
+    else if (text[i] === '}' && --depth === 0) return text.slice(start + 1, i);
+  }
+  return text.slice(start + 1);
+};
+
+// `dependency "vpc" { config_path = ...; mock_outputs = {...} }` blocks of a unit:
+// where each points, and the literal mock values (to spot them in a plan).
+export const terragruntDependencies = (root: string, unitDir: string, text: string): TgDependency[] => {
+  const expanded = expandLocals(expandFunctions(text, root, unitDir));
+  const out: TgDependency[] = [];
+  for (const m of expanded.matchAll(/dependency\s+"([^"]+)"\s*\{/g)) {
+    const body = blockBody(expanded, m.index! + m[0].length - 1);
+    const cfg = /config_path\s*=\s*"([^"]+)"/.exec(body);
+    const dir = cfg ? toRepoPath(cfg[1], unitDir) : null;
+    if (!dir) continue;
+    const mockStart = /mock_outputs\s*=\s*\{/.exec(body);
+    const mocks = mockStart
+      ? [...blockBody(body, mockStart.index + mockStart[0].length - 1).matchAll(/"([^"\n]{3,})"/g)].map(x => x[1])
+      : [];
+    out.push({ name: m[1], dir, mocks });
+  }
+  return out;
+};
+
+// Which dependencies a Terragrunt plan filled with mock outputs: Terragrunt's own
+// warning, or a mock value showing up in the plan's input variables.
+export const mockedDependencies = (unitDir: string, deps: TgDependency[], output: string, plan: Record<string, any> | undefined): string[] => {
+  const hit = new Set<string>();
+  for (const line of output.split('\n')) {
+    const w = /Config\s+(\S+?)\/terragrunt\.hcl\s+is a dependency of .*mock outputs/i.exec(line);
+    if (!w) continue;
+    const dir = w[1].startsWith('/') ? null : resolveRel(unitDir, w[1]);
+    const dep = deps.find(d => d.dir === dir) ?? deps.find(d => line.includes(`/${posix.basename(d.dir)}/terragrunt.hcl`));
+    if (dep) hit.add(dep.dir);
+  }
+  const values = JSON.stringify(plan?.variables ?? {});
+  for (const d of deps) if (d.mocks.some(v => values.includes(JSON.stringify(v)))) hit.add(d.dir);
+  return [...hit];
+};
+
+// Dependencies a failed Terragrunt plan needed but couldn't read: not applied yet, and
+// the unit has no mock_outputs. Terragrunt prints the path relative to the unit
+// ("../vpc"), or relative to the checkout once tfv tidies absolute paths ("./live/prod/vpc").
+export const unappliedDependencies = (unitDir: string, deps: TgDependency[], output: string): string[] => {
+  const hit = new Set<string>();
+  for (const m of output.matchAll(/(\S+?)\/terragrunt\.hcl is a dependency of \S+ but detected no outputs/g)) {
+    const path = m[1].replace(/^\*\s*/, '');
+    const candidates = [resolveRel(unitDir, path), posix.normalize(path).replace(/^\.\//, '')];
+    const dep = deps.find(d => candidates.includes(d.dir)) ?? deps.find(d => posix.basename(d.dir) === posix.basename(path));
+    if (dep) hit.add(dep.dir);
+  }
+  return [...hit];
+};
+
+// ---- tfv watch ---------------------------------------------------------------
+// Extra files that should replan a project, for anything the config doesn't name:
+//   # tfv:watch lambda/orders/**/*.py scripts/build.sh     (any .tf / .tofu / .hcl file)
+//   locals { tfv_watch = ["${get_repo_root()}/lambda/**"] } (Terragrunt, with functions)
+//   watch: [...]                                           (tfv.yaml, per project)
+// Relative to the project folder; a leading "/" means the repo root. Globs allowed;
+// a plain folder means everything inside it. Added to automatic detection.
+const toWatchGlob = (root: string, projectDir: string, raw: string): string | null => {
+  let v = raw.trim();
+  if (!v) return null;
+  let path: string;
+  if (v.startsWith(ROOT)) path = v.slice(ROOT.length).replace(/^\/+/, '');
+  else if (v.startsWith('/')) path = v.slice(1);
+  else path = projectDir === '.' ? v : `${projectDir}/${v}`;
+  path = posix.normalize(path).replace(/^\.\//, '');
+  if (path.startsWith('..')) return null;
+  const isGlob = /[*?[]/.test(path);
+  if (!isGlob && existsSync(join(root, path)) && lstatSync(join(root, path)).isDirectory()) return `${path.replace(/\/+$/, '')}/**`;
+  return path;
+};
+
+export const watchGlobs = (root: string, projectDir: string, files: { name: string; text: string }[], configured: string[] = []): string[] => {
+  const out = new Set<string>();
+  const add = (raw: string) => { const g = toWatchGlob(root, projectDir, raw); if (g) out.add(g); };
+  configured.forEach(add);
+  for (const f of files) {
+    for (const m of f.text.matchAll(/(?:#|\/\/)\s*tfv:watch\s+([^\n]+)/g)) m[1].trim().split(/\s+/).forEach(add);
+    if (f.name.endsWith('.hcl')) {
+      const expanded = expandLocals(expandFunctions(f.text, root, projectDir));
+      for (const m of expanded.matchAll(/tfv_watch\s*=\s*\[([\s\S]*?)\]/g)) {
+        for (const q of m[1].matchAll(/"([^"\n]*)"/g)) if (!q[1].includes('${')) add(q[1]);
+      }
+    }
+  }
+  return [...out];
+};
+
+const projectFiles = (root: string, info: DirInfo) => [
+  ...info.tfFiles.map(name => ({ name, text: readFileSync(join(root, info.dir, name), 'utf-8') })),
+  ...(info.terragrunt ? [{ name: 'terragrunt.hcl', text: info.terragrunt }] : []),
+];
 
 const hasBackend = (root: string, info: DirInfo): boolean =>
   info.tfFiles.some(f => /^\s*(backend\s+"|cloud\s*\{)/m.test(readFileSync(join(root, info.dir, f), 'utf-8')));
@@ -127,10 +322,17 @@ export const discoverProjects = (root: string, repoConfig: RepoConfig): Project[
   // Every local module dir, and what each dir pulls in.
   const referenced = new Set<string>();
   const sources = new Map<string, string[]>();
+  const tgRefs = new Map<string, ReturnType<typeof terragruntRefs>>();
   for (const info of dirs.values()) {
     const s = moduleSources(root, info);
     sources.set(info.dir, s);
     s.forEach(d => referenced.add(d));
+    if (info.terragrunt) {
+      // Folders a unit sources (terraform { source = ... }) are modules, not projects.
+      const refs = terragruntRefs(root, info.dir, info.terragrunt);
+      tgRefs.set(info.dir, refs);
+      refs.dirs.forEach(d => { if (!dirs.get(d)?.terragrunt) referenced.add(d); });
+    }
   }
 
   // Transitive local module dirs for a project dir.
@@ -159,19 +361,18 @@ export const discoverProjects = (root: string, repoConfig: RepoConfig): Project[
 
       const deps = new Set(moduleClosure(info.dir));
       if (info.terragrunt) {
-        for (const p of allMatches(CONFIG_PATH, info.terragrunt)) {
-          const r = resolveRel(info.dir, p);
-          if (r) deps.add(r);
+        const refs = tgRefs.get(info.dir)!;
+        refs.files.forEach(f => deps.add(f));
+        for (const d of refs.dirs) {
+          deps.add(d);
+          moduleClosure(d).forEach(m => deps.add(m)); // modules used by a referenced module
+          for (const sub of sources.get(d) ?? []) deps.add(sub);
         }
-        for (const list of allMatches(DEP_PATHS, info.terragrunt)) {
-          for (const p of allMatches(/"([^"]+)"/g, list)) {
-            const r = resolveRel(info.dir, p);
-            if (r) deps.add(r);
-          }
-        }
-        for (const p of allMatches(RELATIVE_FILE, info.terragrunt)) {
-          const r = resolveRel(info.dir, p);
-          if (r) deps.add(r);
+      } else {
+        // Files a plain project reads from outside its folder, e.g. file("${path.module}/../shared/policy.json").
+        for (const f of info.tfFiles) {
+          const refs = terragruntRefs(root, info.dir, readFileSync(join(root, info.dir, f), 'utf-8'));
+          refs.files.forEach(x => { if (!(info.dir === '.' || x.startsWith(`${info.dir}/`))) deps.add(x); });
         }
       }
 
@@ -183,6 +384,7 @@ export const discoverProjects = (root: string, repoConfig: RepoConfig): Project[
         engine: isTerragrunt ? 'terragrunt' : tool,
         tool,
         autoplan: true,
+        watch: watchGlobs(root, info.dir, projectFiles(root, info)),
         deps: [...deps],
       });
     }
@@ -204,7 +406,10 @@ export const discoverProjects = (root: string, repoConfig: RepoConfig): Project[
       engine: pc.engine ?? base?.engine ?? (info?.terragrunt ? 'terragrunt' : tool),
       tool,
       autoplan: pc.autoplan ?? true,
-      whenModified: pc.when_modified,
+      watch: [...new Set([
+        ...(base?.watch ?? []),
+        ...watchGlobs(root, pc.dir, info ? projectFiles(root, info) : [], pc.watch ?? []),
+      ])],
       version: pc.version,
       terragruntVersion: pc.terragrunt_version,
       deps: base?.deps ?? (info ? moduleClosure(pc.dir) : []),
@@ -240,10 +445,7 @@ export const affectedProjects = (projects: Project[], changedFiles: string[]): P
   };
 
   const direct = (p: Project): boolean => files.some(f => {
-    if (p.whenModified?.length) {
-      const rel = posix.relative(p.dir === '.' ? '' : p.dir, f);
-      return p.whenModified.some(g => matchGlob(g.replace(/^\.\//, ''), rel));
-    }
+    if (p.watch.some(g => matchGlob(g, f))) return true;
     if (within(f, p.dir) && owner(f) === p.dir) return true;
     if (p.deps.some(d => within(f, d))) return true;
     // Version pins and shared terragrunt config in parent folders.

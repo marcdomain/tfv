@@ -6,53 +6,77 @@
   <title>tfv server</title>
   <script src="/theme.js"></script>
   <link rel="stylesheet" href="/app.css">
-  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%233346c4'/%3E%3Ctext x='16' y='21' font-family='monospace' font-size='13' font-weight='700' fill='white' text-anchor='middle'%3Etfv%3C/text%3E%3C/svg%3E">
+  <link rel="icon" href="/favicon.svg" type="image/svg+xml">
 </head>
-<body>
-  <header class="top">
-    <div class="brand"><span class="logo">tfv</span><span class="product">server</span></div>
-    <nav id="nav" aria-label="Sections">
-      <a href="#overview" data-view="overview">Overview</a>
-      <a href="#runs" data-view="runs">Runs</a>
-      <a href="#projects" data-view="projects">Projects</a>
-      <a href="#locks" data-view="locks">Locks</a>
-      <a href="#drift" data-view="drift">Drift</a>
-      <a href="#audit" data-view="audit">Audit</a>
-    </nav>
-    <div class="top-right">
-      <span id="connected" class="connected small" hidden></span>
-      <span id="refreshed" class="muted small"></span>
-      <button id="theme" class="ghost small icon" type="button" title="Theme"></button>
-      <span id="me" class="me small" hidden></span>
-      <button id="signout" class="ghost small" type="button" hidden>Sign out</button>
-    </div>
-  </header>
+<body class="signed-out">
+  <div class="shell">
+    <aside class="side" aria-label="tfv server">
+      <a class="brand" href="#overview"><svg class="logo" viewBox="0 0 164 64" role="img" aria-label="tfv"><defs> <linearGradient id="tfv-top" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#c7d2fe"/><stop offset="1" stop-color="#8b9bfb"/></linearGradient> <linearGradient id="tfv-left" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#6d6af7"/><stop offset="1" stop-color="#4f46e5"/></linearGradient> <linearGradient id="tfv-right" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#4338ca"/><stop offset="1" stop-color="#312e81"/></linearGradient> </defs> <g stroke-linejoin="round" stroke-width="3.5"> <path d="M32 4 L55 19 L32 35 L9 19 Z" fill="url(#tfv-top)" stroke="url(#tfv-top)"/> <path d="M9 19 L32 35 L32 60 L9 45 Z" fill="url(#tfv-left)" stroke="url(#tfv-left)"/> <path d="M55 19 L32 35 L32 60 L55 45 Z" fill="url(#tfv-right)" stroke="url(#tfv-right)"/> </g> <path d="M14.5 32.5 L32 45 L49.5 32.5" fill="none" stroke="#fff" stroke-opacity="0.32" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round"/> <path d="M14 21.5 L32 34 L50 21.5" fill="none" stroke="#fff" stroke-width="5.5" stroke-linecap="round" stroke-linejoin="round"/><g fill="none" stroke="currentColor" stroke-width="8" stroke-linecap="round" stroke-linejoin="round"><path d="M86 13 V41 Q86 51 96 51"/><path d="M78 25 H96"/><path d="M116 51 V24 Q116 12 128 12"/><path d="M108 27 H126"/><path d="M134 25 L146 51 L158 25"/></g></svg><span class="product">server</span></a>
+      <nav id="nav" aria-label="Sections">
+        <a href="#overview" data-view="overview"><svg class="ni" viewBox="0 0 16 16" aria-hidden="true"><rect x="2" y="2" width="5" height="5" rx="1"/><rect x="9" y="2" width="5" height="5" rx="1"/><rect x="2" y="9" width="5" height="5" rx="1"/><rect x="9" y="9" width="5" height="5" rx="1"/></svg><span>Overview</span></a>
+        <a href="#runs" data-view="runs"><svg class="ni" viewBox="0 0 16 16" aria-hidden="true"><path d="M5 3.5v9l7-4.5z"/></svg><span>Runs</span></a>
+        <a href="#projects" data-view="projects"><svg class="ni" viewBox="0 0 16 16" aria-hidden="true"><path d="M2 4.5c0-.6.4-1 1-1h3.2l1.3 1.5H13c.6 0 1 .4 1 1v6c0 .6-.4 1-1 1H3c-.6 0-1-.4-1-1z"/></svg><span>Projects</span></a>
+        <a href="#locks" data-view="locks"><svg class="ni" viewBox="0 0 16 16" aria-hidden="true"><rect x="3" y="7" width="10" height="7" rx="1.2"/><path d="M5.5 7V5a2.5 2.5 0 0 1 5 0v2"/></svg><span>Locks</span></a>
+        <a href="#drift" data-view="drift"><svg class="ni" viewBox="0 0 16 16" aria-hidden="true"><path d="M1.5 6c2-2 3.5 2 6.5 0s4.5 2 6.5 0M1.5 10.5c2-2 3.5 2 6.5 0s4.5 2 6.5 0"/></svg><span>Drift</span></a>
+        <a href="#audit" data-view="audit"><svg class="ni" viewBox="0 0 16 16" aria-hidden="true"><path d="M8 1.8 13 4v3.6c0 3-2.2 5.6-5 6.6-2.8-1-5-3.6-5-6.6V4z"/><path d="m5.8 8 1.6 1.6L10.4 6.6"/></svg><span>Audit</span></a>
+        <a href="#metrics" data-view="metrics"><svg class="ni" viewBox="0 0 16 16" aria-hidden="true"><path d="M2.5 13.5h11"/><path d="M4.5 11V8M8 11V4M11.5 11V6.5"/></svg><span>Metrics</span></a>
+      </nav>
+      <div class="side-foot">
+        <span id="connected" class="connected small" hidden></span>
+        <div id="me" class="me" hidden></div>
+        <div class="side-actions">
+          <button id="theme" class="ghost small icon" type="button" title="Theme"></button>
+          <button id="signout" class="ghost small" type="button" hidden>Sign out</button>
+        </div>
+      </div>
+    </aside>
 
-  <main id="main">
-    <section id="signin" class="signin" hidden>
-      <h1>Sign in to tfv server</h1>
-      <p id="signin-error" class="error" role="alert" hidden></p>
-      <a id="sso" class="button sso" href="/auth/oidc/login" hidden></a>
-      <div id="or" class="or" hidden><span>or</span></div>
-      <form id="password-form" hidden>
-        <label for="username">Username</label>
-        <input id="username" autocomplete="username" spellcheck="false" required>
-        <label for="password">Password</label>
-        <input id="password" type="password" autocomplete="current-password" required>
-        <button type="submit">Sign in</button>
-      </form>
-      <details id="token-box" hidden>
-        <summary>Use an API token</summary>
-        <form id="token-form">
-          <label for="token">API token (<code>TFV_API_TOKEN</code>)</label>
-          <input id="token" type="password" autocomplete="off" spellcheck="false" required>
-          <button type="submit" class="ghost">Sign in with token</button>
-        </form>
-      </details>
-      <p id="no-auth" class="muted" hidden>No sign-in method is set up. Configure single sign-on (<code>TFV_OIDC_*</code>), dashboard users, or <code>TFV_API_TOKEN</code>.</p>
-    </section>
-    <section id="view"></section>
-  </main>
+    <div class="content">
+      <main id="main">
+        <section id="signin" class="signin" hidden>
+          <h1>Sign in to tfv server</h1>
+          <p id="signin-error" class="error" role="alert" hidden></p>
+          <a id="sso" class="button sso" href="/auth/oidc/login" hidden></a>
+          <div id="or" class="or" hidden><span>or</span></div>
+          <form id="password-form" hidden>
+            <label for="username">Username</label>
+            <input id="username" autocomplete="username" spellcheck="false" required>
+            <label for="password">Password</label>
+            <input id="password" type="password" autocomplete="current-password" required>
+            <button type="submit">Sign in</button>
+          </form>
+          <details id="token-box" hidden>
+            <summary>Use an API token</summary>
+            <form id="token-form">
+              <label for="token">API token (<code>TFV_API_TOKEN</code>)</label>
+              <input id="token" type="password" autocomplete="off" spellcheck="false" required>
+              <button type="submit" class="ghost">Sign in with token</button>
+            </form>
+          </details>
+          <p id="no-auth" class="muted" hidden>No sign-in method is set up. Configure single sign-on (<code>TFV_OIDC_*</code>), dashboard users, or <code>TFV_API_TOKEN</code>.</p>
+        </section>
+        <section id="view"></section>
+      </main>
+      <footer class="foot">
+        <span><b>tfv server</b> <span id="version" class="mono"></span></span>
+        <span id="refreshed"></span>
+        <span class="foot-links"><a href="/metrics" target="_blank" rel="noopener">Prometheus metrics</a><a href="/healthz" target="_blank" rel="noopener">Health</a></span>
+      </footer>
+    </div>
+  </div>
+
+  <dialog id="modal" aria-labelledby="modal-title">
+    <form method="dialog" class="modal">
+      <h2 id="modal-title"></h2>
+      <div id="modal-body" class="modal-body"></div>
+      <div class="modal-actions">
+        <button value="cancel" class="ghost" type="submit">Cancel</button>
+        <button id="modal-ok" value="ok" type="submit"></button>
+      </div>
+    </form>
+  </dialog>
+  <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
+  <div id="tip" class="tip" role="tooltip" hidden></div>
 
   <script src="/app.js"></script>
 </body>

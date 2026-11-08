@@ -19,7 +19,40 @@ export const DEFAULT_PERMISSIONS: Record<Action, Principal[]> = {
   apply: ['write'],
   apply_destroy: ['maintain'],
   unlock: ['maintain'],
+  state_read: ['write'],       // state show, show, output
+  state_write: ['write'],      // import, taint, untaint (plus the project's approvals)
+  state_remove: ['maintain'],  // state rm, state mv, force-unlock (plus the project's approvals)
+  // Single commands default to their group (see INHERITS).
+  state_list: [], validate: [], providers: [], fmt: [], state_show: [], show: [], output: [],
+  import: [], taint: [], untaint: [], state_rm: [], state_mv: [], force_unlock: [],
 };
+
+// A Terraform-command permission that isn't set for a project uses the rule it
+// extends, so it's never looser than what was set for plan, apply or destroy.
+// A single command that isn't set uses its group, which uses plan, apply or apply_destroy.
+export const INHERITS: Partial<Record<Action, Action>> = {
+  state_read: 'plan', state_write: 'apply', state_remove: 'apply_destroy',
+  state_list: 'plan', validate: 'plan', providers: 'plan', fmt: 'plan',
+  state_show: 'state_read', show: 'state_read', output: 'state_read',
+  import: 'state_write', taint: 'state_write', untaint: 'state_write',
+  state_rm: 'state_remove', state_mv: 'state_remove', force_unlock: 'state_remove',
+};
+const chain = (action: Action): Action[] => {
+  const out: Action[] = [action];
+  while (INHERITS[out.at(-1)!]) out.push(INHERITS[out.at(-1)!]!);
+  return out;
+};
+// The most specific list that is set: the command, its group, then the rule the group extends.
+const listFor = (perms: Partial<Record<Action, Principal[]>> | undefined, action: Action): Principal[] | undefined => {
+  for (const a of chain(action)) if (perms?.[a]) return perms[a];
+  return undefined;
+};
+const defaultFor = (action: Action): Principal[] => {
+  for (const a of chain(action)) if (DEFAULT_PERMISSIONS[a].length) return DEFAULT_PERMISSIONS[a];
+  return [];
+};
+const needs = (action: Action, project: Project, list: Principal[], where = '') =>
+  list.length ? `${action} on \`${project.name}\` needs ${list.join(' or ')}${where}` : `${action} is turned off for \`${project.name}\`${where}`;
 
 export const repoPolicyFor = (policies: RepoPolicy[], repo: Repo): RepoPolicy | null =>
   policies.find(p => matchGlob(p.id, `${repo.host}/${repo.fullName}`)) ?? null;
@@ -105,14 +138,14 @@ export interface Decision { allowed: boolean; reason: string }
 export const checkPermission = async (
   action: Action, user: string, project: Project, rules: EffectiveRules, lookup: Lookup,
 ): Promise<Decision> => {
-  const serverList = rules.server?.permissions?.[action] ?? DEFAULT_PERMISSIONS[action];
+  const serverList = listFor(rules.server?.permissions, action) ?? defaultFor(action);
   if (!(await matchesAny(serverList, user, project, lookup))) {
-    return { allowed: false, reason: `${action} on \`${project.name}\` needs ${serverList.join(' or ')}` };
+    return { allowed: false, reason: needs(action, project, serverList) };
   }
   for (const r of rules.repo) {
-    const list = r.permissions?.[action];
+    const list = listFor(r.permissions, action);
     if (list && !(await matchesAny(list, user, project, lookup))) {
-      return { allowed: false, reason: `${action} on \`${project.name}\` needs ${list.join(' or ')} (repo config)` };
+      return { allowed: false, reason: needs(action, project, list, ' (repo config)') };
     }
   }
   return { allowed: true, reason: 'allowed' };

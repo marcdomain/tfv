@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { parseCommand } from '../src/commands.ts';
 
-const names = ['tfv', 'atlantis'];
+const names = ['tfv'];
 const ok = (body: string) => {
   const r = parseCommand(body, names);
   assert.ok(r && r.ok, `expected ok for ${body}: ${JSON.stringify(r)}`);
@@ -21,7 +21,7 @@ test('bare name means help', () => {
 
 test('plan with flags', () => {
   const c = ok('tfv plan -p prod/network -w staging --destroy');
-  assert.deepEqual(c, { verb: 'plan', project: 'prod/network', workspace: 'staging', destroy: true, targets: [], extraArgs: [] });
+  assert.deepEqual(c, { verb: 'plan', project: 'prod/network', workspace: 'staging', destroy: true, override: false, targets: [], extraArgs: [] });
 });
 
 test('long flags, = syntax, ./dir normalized', () => {
@@ -34,8 +34,8 @@ test('extra args after --, with quotes', () => {
   assert.deepEqual(ok('tfv plan -- -var "env=prod east" -refresh=false').extraArgs, ['-var', 'env=prod east', '-refresh=false']);
 });
 
-test('atlantis compatibility and @mention', () => {
-  assert.equal(ok('atlantis apply -p x').verb, 'apply');
+test('@mention and case', () => {
+  assert.equal(parseCommand('terraform apply -p x', names), null, 'only tfv commands');
   assert.equal(ok('@tfv plan').verb, 'plan');
   assert.equal(ok('TFV PLAN').verb, 'plan');
 });
@@ -65,4 +65,41 @@ test('help lists only what the server allows', async () => {
   const strict = helpText('tfv', true);
   assert.doesNotMatch(strict, /\| `tfv apply` \|/);
   assert.match(strict, /\| `tfv apply -p <project>` \| Apply one project \(this server applies one project at a time\) \|/);
+});
+
+test('Terraform commands: one project, checked arguments, nothing passed through', async () => {
+  const { toolArgs, TOOL_ACTION } = await import('../src/commands.ts');
+  const c = (body: string) => ok(body);
+  assert.deepEqual(toolArgs(c('tfv state list -p infra/dev')), ['state', 'list']);
+  assert.deepEqual(toolArgs(c('tfv state show -p infra/dev module.bucket.aws_s3_bucket.this[0]')), ['state', 'show', 'module.bucket.aws_s3_bucket.this[0]']);
+  assert.deepEqual(toolArgs(c('tfv state rm -p infra/dev aws_s3_bucket.a aws_s3_bucket.b')), ['state', 'rm', 'aws_s3_bucket.a', 'aws_s3_bucket.b']);
+  assert.deepEqual(toolArgs(c('tfv state mv -p infra/dev aws_s3_bucket.a aws_s3_bucket.b')), ['state', 'mv', 'aws_s3_bucket.a', 'aws_s3_bucket.b']);
+  assert.deepEqual(toolArgs(c('tfv import -p infra/dev aws_s3_bucket.a my-bucket')), ['import', '-input=false', '-no-color', 'aws_s3_bucket.a', 'my-bucket']);
+  assert.deepEqual(toolArgs(c('tfv output -p infra/dev bucket')), ['output', '-no-color', 'bucket']);
+  assert.deepEqual(toolArgs(c('tfv force-unlock -p infra/dev 1a2b-3c')), ['force-unlock', '-force', '1a2b-3c']);
+  assert.equal(TOOL_ACTION['state rm'], 'state_rm');
+  assert.equal(TOOL_ACTION['force-unlock'], 'force_unlock');
+  assert.equal(TOOL_ACTION['state list'], 'state_list');
+
+  const err = (body: string) => (parseCommand(body, names) as { error: string }).error;
+  assert.match(err('tfv state list'), /runs on one project/);
+  assert.match(err('tfv state blah -p x'), /needs one of: list, show, rm, mv/);
+  assert.match(err('tfv state show -p x'), /Usage: `tfv state show -p <project> <address>`/);
+  assert.match(err('tfv state mv -p x a.b'), /Usage/);
+  assert.match(err('tfv import -p x aws_s3_bucket.a -chdir=/'), /Unknown flag/);
+  assert.match(err('tfv state rm -p x "a.b; rm -rf /"'), /Usage/);
+  assert.match(err('tfv output -p x -json'), /Unknown flag/);
+  assert.match(err('tfv show -p x extra'), /Usage/);
+  assert.match(err('tfv state list -p x -t a.b'), /Only `-p`, `-d` and `-w` work/);
+  assert.match(err('tfv console -p x'), /Unknown command `console`/);
+  assert.match(err('tfv plan extra'), /Unexpected `extra`/);
+});
+
+test('plan --refresh-only and --replace', () => {
+  const c = ok('tfv plan -p infra/dev --replace aws_s3_bucket.a --replace aws_s3_bucket.b');
+  assert.deepEqual(c.replace, ['aws_s3_bucket.a', 'aws_s3_bucket.b']);
+  assert.equal(ok('tfv plan -p infra/dev --refresh-only').refreshOnly, true);
+  assert.match((parseCommand('tfv apply --replace a.b', names) as { error: string }).error, /only work with plan/);
+  assert.match((parseCommand('tfv plan --refresh-only --destroy', names) as { error: string }).error, /can't be combined/);
+  assert.match((parseCommand('tfv plan --replace -x', names) as { error: string }).error, /needs a value/);
 });

@@ -12,6 +12,7 @@ export interface Presenter {
   lock(l: Lock): Lock & { links: Record<string, string | null> };
   audit(a: AuditEntry): AuditEntry & { links: Record<string, string | null> };
   drift(d: Record<string, any>): Record<string, any>;
+  finding(f: Record<string, any>): Record<string, any>;
 }
 
 // Platform logins look like this; display names ("Ada Admin") don't.
@@ -54,6 +55,10 @@ export const presenter = (known: Record<string, Platform>, people: Person[]): Pr
     audit(a) {
       const l = L(a.repo);
       return { ...a, links: { platform: l.name, pr: a.pr ? l.pr(a.pr) : null, user: profile(l, a.user), userAvatar: profile(l, a.user) ? face(a.repo, a.user) : null } };
+    },
+    finding(f) {
+      const l = L(String(f.repo));
+      return { ...f, links: { platform: l.name, pr: l.pr(Number(f.pr)), user: profile(l, String(f.user)), userAvatar: face(String(f.repo), String(f.user)) } };
     },
     drift(d) {
       const l = L(d.repo);

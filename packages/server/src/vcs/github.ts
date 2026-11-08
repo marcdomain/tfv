@@ -66,9 +66,27 @@ export class GitHubAdapter implements VcsAdapter {
 
   // ---- auth ----
 
+  // Which installation of the App covers a repo. Webhooks carry it; for work that
+  // starts elsewhere (the dashboard, schedules) it's looked up once and remembered.
+  private installationIds = new Map<string, number>();
+  private async installationFor(repo: Repo): Promise<number> {
+    if (repo.installationId) {
+      this.installationIds.set(repo.fullName.toLowerCase(), repo.installationId);
+      return repo.installationId;
+    }
+    const known = this.installationIds.get(repo.fullName.toLowerCase());
+    if (known) return known;
+    const res = await this.fetchImpl(`${this.cfg.apiUrl}/repos/${repo.fullName}/installation`, {
+      headers: { Authorization: `Bearer ${appJwt(this.cfg.appId, this.cfg.privateKey)}`, Accept: 'application/vnd.github+json', 'User-Agent': 'tfv-server' },
+    });
+    if (!res.ok) throw new Error(`no GitHub App installation for ${repo.fullName} (HTTP ${res.status}); is the App installed on it?`);
+    const id = (await res.json() as { id: number }).id;
+    this.installationIds.set(repo.fullName.toLowerCase(), id);
+    return id;
+  }
+
   private async installationToken(repo: Repo): Promise<string> {
-    const id = repo.installationId;
-    if (!id) throw new Error(`no GitHub App installation for ${repo.fullName}`);
+    const id = await this.installationFor(repo);
     const cached = this.tokens.get(id);
     if (cached && cached.expires - 5 * 60_000 > Date.now()) return cached.token;
     const res = await this.fetchImpl(`${this.cfg.apiUrl}/app/installations/${id}/access_tokens`, {
@@ -104,7 +122,7 @@ export class GitHubAdapter implements VcsAdapter {
     return { status: res.status, data: (text ? JSON.parse(text) : null) as T, next };
   }
 
-  private async paginate<T>(repo: Repo, path: string, max = 3000): Promise<T[]> {
+  private async paginate<T>(repo: Repo, path: string, max = 10000): Promise<T[]> {
     const out: T[] = [];
     let next: string | null = `${path}${path.includes('?') ? '&' : '?'}per_page=100`;
     while (next && out.length < max) {
@@ -185,7 +203,16 @@ export class GitHubAdapter implements VcsAdapter {
       }
     }
     if (event === 'issue_comment') {
-      if (body.action !== 'created' || !body.issue?.pull_request) return { kind: 'ignored', reason: 'not a new PR comment' };
+      if (!body.issue?.pull_request) return { kind: 'ignored', reason: 'not a PR comment' };
+      // A bot's comment (maybe ours) changed by someone other than that bot.
+      if ((body.action === 'edited' || body.action === 'deleted') && body.comment?.user?.type === 'Bot') {
+        if (body.sender?.login === body.comment.user.login) return { kind: 'ignored', reason: 'bot edited its own comment' };
+        return {
+          kind: 'bot_comment_changed', repo, prNumber: body.issue.number, commentId: String(body.comment.id),
+          by: body.sender?.login ?? 'unknown', change: body.action, body: body.comment.body ?? '',
+        };
+      }
+      if (body.action !== 'created') return { kind: 'ignored', reason: 'not a new PR comment' };
       if (body.comment.user?.type === 'Bot') return { kind: 'ignored', reason: 'bot comment' };
       return {
         kind: 'comment', repo, prNumber: body.issue.number, commentId: String(body.comment.id),
@@ -227,14 +254,19 @@ export class GitHubAdapter implements VcsAdapter {
 
   // ---- writing to the PR ----
 
-  async upsertComment(repo: Repo, number: number, marker: string, body: string): Promise<string | null> {
+  async upsertComment(repo: Repo, number: number, marker: string, body: string, knownId?: string | null): Promise<{ id: string; url: string } | null> {
+    // Fast path: edit the comment we made last time, without listing the PR's comments.
+    if (knownId) {
+      const { status, data } = await this.api(repo, 'PATCH', `/repos/${repo.fullName}/issues/comments/${encodeURIComponent(knownId)}`, { body }, [404]);
+      if (status === 200) return { id: String(data.id), url: data.html_url };
+    }
     const comments = await this.paginate<any>(repo, `/repos/${repo.fullName}/issues/${number}/comments`);
     const mine = comments.find(c => c.performed_via_github_app?.id === Number(this.cfg.appId) && c.body?.includes(marker))
       ?? comments.find(c => c.user?.type === 'Bot' && c.body?.includes(marker));
     const { data } = mine
       ? await this.api(repo, 'PATCH', `/repos/${repo.fullName}/issues/comments/${mine.id}`, { body })
       : await this.api(repo, 'POST', `/repos/${repo.fullName}/issues/${number}/comments`, { body });
-    return data?.html_url ?? null;
+    return data?.id != null ? { id: String(data.id), url: data.html_url } : null;
   }
 
   async comment(repo: Repo, number: number, body: string): Promise<string | null> {

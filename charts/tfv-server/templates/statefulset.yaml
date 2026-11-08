@@ -81,14 +81,16 @@ spec:
               value: {{ .Values.config.commentMode | default "new" | quote }}
             - name: TFV_PARALLELISM
               value: {{ .Values.config.parallelism | quote }}
+            {{- with .Values.config.prParallelism }}
+            - name: TFV_PR_PARALLELISM
+              value: {{ . | quote }}
+            {{- end }}
             - name: TFV_RUN_TIMEOUT_SECONDS
               value: {{ .Values.config.runTimeoutSeconds | quote }}
             - name: TFV_DEFAULT_VERSION
               value: {{ .Values.config.defaultVersion | quote }}
             - name: TFV_DRIFT
               value: {{ .Values.config.drift | quote }}
-            - name: TFV_ATLANTIS_COMPAT
-              value: {{ .Values.config.atlantisCompat | quote }}
             - name: TFV_LOG_LEVEL
               value: {{ .Values.config.logLevel | quote }}
             {{- with .Values.config.preinstall }}

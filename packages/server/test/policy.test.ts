@@ -8,7 +8,7 @@ import { parseRepoConfig, emptyRepoConfig } from '../src/repoConfig.ts';
 import type { Project } from '../src/discovery.ts';
 import type { Permission, Repo } from '../src/vcs/types.ts';
 
-const project = (name: string): Project => ({ name, dir: name, workspace: 'default', engine: 'terraform', tool: 'terraform', autoplan: true, deps: [] });
+const project = (name: string): Project => ({ name, dir: name, workspace: 'default', engine: 'terraform', tool: 'terraform', autoplan: true, deps: [], watch: [] });
 
 // Fake org: who has which repo permission and team.
 const PERMS: Record<string, Permission> = { alice: 'admin', bob: 'write', carol: 'write', dave: 'read', erin: 'maintain', frank: 'write' };
@@ -161,4 +161,60 @@ describe('spinner availability', () => {
       assert.equal(spinnerUrlFor(u), null, u);
     }
   });
+});
+
+test('by default results are posted once and never edited (no "Running…" reply)', async () => {
+  const { loadConfig } = await import('../src/config.ts');
+  const { mkdtempSync, writeFileSync, rmSync } = await import('node:fs');
+  const { tmpdir } = await import('node:os');
+  const { join } = await import('node:path');
+  const dir = mkdtempSync(join(tmpdir(), 'tfv-cfg-'));
+  try {
+    writeFileSync(join(dir, 'repos.yaml'), 'repos:\n  - id: github.com/acme/*\n');
+    const env = { TFV_DATA_DIR: dir, TFV_REPOS_CONFIG: join(dir, 'repos.yaml'), TFV_GITHUB_APP_ID: '1', TFV_GITHUB_PRIVATE_KEY: 'k', TFV_GITHUB_WEBHOOK_SECRET: 'w' };
+    assert.equal(loadConfig(env).progressReply, false);
+    assert.equal(loadConfig({ ...env, TFV_PROGRESS_REPLY: 'true' }).progressReply, true);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('state permissions: defaults, and never looser than the plan/apply/destroy rules they extend', async () => {
+  const { checkPermission } = await import('../src/policy.ts');
+  const lookup = { permission: async (u: string) => ({ bob: 'write', erin: 'maintain', alice: 'admin' } as Record<string, any>)[u] ?? 'none', inTeam: async () => false, codeowners: async () => [] } as any;
+  const p = project('infra/prod');
+  const rules = (perms: Record<string, string[]> = {}) => ({ server: { match: '**', permissions: perms }, repo: [], requirements: [] }) as any;
+  const can = async (action: any, user: string, r = rules()) => (await checkPermission(action, user, p, r, lookup)).allowed;
+  // Defaults: write may read state and import; removing from state needs maintain.
+  assert.equal(await can('state_read', 'bob'), true);
+  assert.equal(await can('state_write', 'bob'), true);
+  assert.equal(await can('state_remove', 'bob'), false);
+  assert.equal(await can('state_remove', 'erin'), true);
+  // Destroy limited to admins: state rm follows, without being configured.
+  const strict = rules({ apply_destroy: ['admin'], apply: ['maintain'] });
+  assert.equal(await can('state_remove', 'erin', strict), false);
+  assert.equal(await can('state_remove', 'alice', strict), true);
+  assert.equal(await can('state_write', 'bob', strict), false, 'import follows apply');
+  // Set explicitly: that wins.
+  assert.equal(await can('state_read', 'bob', rules({ state_read: ['admin'] })), false);
+});
+
+test('single commands: use their group unless set; [] turns one off', async () => {
+  const { checkPermission } = await import('../src/policy.ts');
+  const lookup = { permission: async (u: string) => ({ bob: 'write', erin: 'maintain', alice: 'admin' } as Record<string, any>)[u] ?? 'none', inTeam: async () => false, codeowners: async () => [] } as any;
+  const p = project('infra/prod');
+  const rules = (perms: Record<string, string[]>) => ({ server: { match: '**', permissions: perms }, repo: [], requirements: [] }) as any;
+  const r = rules({ state_remove: ['admin'], force_unlock: [], state_mv: ['maintain'] });
+  const can = async (action: any, user: string) => (await checkPermission(action, user, p, r, lookup));
+  assert.equal((await can('state_rm', 'alice')).allowed, true, 'state rm: the group (admin)');
+  assert.equal((await can('state_rm', 'erin')).allowed, false);
+  assert.equal((await can('state_mv', 'erin')).allowed, true, 'state mv: its own rule');
+  const off = await can('force_unlock', 'alice');
+  assert.equal(off.allowed, false, 'force-unlock: nobody');
+  assert.match(off.reason, /force_unlock is turned off for `infra\/prod`/);
+  // Nothing set at all: defaults by group.
+  const none = rules({});
+  assert.equal((await checkPermission('import' as any, 'bob', p, none, lookup)).allowed, true);
+  assert.equal((await checkPermission('state_rm' as any, 'bob', p, none, lookup)).allowed, false);
+  assert.equal((await checkPermission('output' as any, 'bob', p, none, lookup)).allowed, true);
 });

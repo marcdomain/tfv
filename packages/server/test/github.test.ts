@@ -79,3 +79,66 @@ test('permission lookup maps GitHub roles and caches', async () => {
   assert.equal(await a.inTeam(repo, 'other-org/platform-admins', 'dave'), false);
   assert.equal(calls, 4); // erin's second lookup came from the cache
 });
+
+test('approvals on later pages of reviews are found (pagination)', async () => {
+  // 250 reviews over 3 pages; the only approval of the head commit is on page 3.
+  const all = Array.from({ length: 250 }, (_, i) => ({ id: i, user: { login: `u${i}` }, state: 'COMMENTED', commit_id: 'head' }));
+  all[245] = { id: 245, user: { login: 'carol' }, state: 'APPROVED', commit_id: 'head' };
+  const fake: typeof fetch = async (url) => {
+    const u = new URL(String(url));
+    if (u.pathname.endsWith('/access_tokens')) return new Response(JSON.stringify({ token: 'ghs_x', expires_at: new Date(Date.now() + 3600e3).toISOString() }));
+    const page = Number(u.searchParams.get('page') ?? 1);
+    const items = all.slice((page - 1) * 100, page * 100);
+    const next = page < 3 ? `<https://api.github.com/repos/acme/infra/pulls/7/reviews?per_page=100&page=${page + 1}>; rel="next"` : '';
+    return new Response(JSON.stringify(items), { headers: next ? { link: next } : {} });
+  };
+  const a = new GitHubAdapter(cfg, fake);
+  const repo = { platform: 'github' as const, host: 'github.com', owner: 'acme', name: 'infra', fullName: 'acme/infra', cloneUrl: '', installationId: 9 };
+  const reviews = await a.reviews(repo, 7);
+  assert.equal(reviews.length, 250);
+  assert.deepEqual(reviews.filter(r => r.state === 'approved').map(r => r.user), ['carol']);
+});
+
+test('the single updating comment is edited by id, without listing comments', async () => {
+  const calls: string[] = [];
+  const fake: typeof fetch = async (url, init) => {
+    const u = String(url);
+    calls.push(`${init?.method ?? 'GET'} ${new URL(u).pathname}`);
+    if (u.endsWith('/access_tokens')) return new Response(JSON.stringify({ token: 'ghs_x', expires_at: new Date(Date.now() + 3600e3).toISOString() }));
+    if (u.includes('/issues/comments/111')) return new Response(JSON.stringify({ id: 111, html_url: 'https://github.com/c/111' }));
+    return new Response('{}', { status: 404 });
+  };
+  const a = new GitHubAdapter(cfg, fake);
+  const repo = { platform: 'github' as const, host: 'github.com', owner: 'acme', name: 'infra', fullName: 'acme/infra', cloneUrl: '', installationId: 9 };
+  assert.deepEqual(await a.upsertComment(repo, 7, 'M', 'body', '111'), { id: '111', url: 'https://github.com/c/111' });
+  assert.deepEqual(calls.filter(c => !c.includes('access_tokens')), ['PATCH /repos/acme/infra/issues/comments/111']);
+});
+
+test('webhook: someone else editing a bot comment is reported; the bot editing its own is not', async () => {
+  const base = { repository, issue: { number: 7, pull_request: {} } };
+  const ev = (sender: string): any => gh.parse({ 'x-github-event': 'issue_comment' }, {
+    ...base, action: 'edited', sender: { login: sender }, comment: { id: 5, body: 'x', user: { login: 'tfv[bot]', type: 'Bot' } },
+  });
+  assert.deepEqual({ ...ev('mallory'), repo: undefined }, { kind: 'bot_comment_changed', repo: undefined, prNumber: 7, commentId: '5', by: 'mallory', change: 'edited', body: 'x' });
+  assert.equal(ev('tfv[bot]').kind, 'ignored');
+});
+
+test('a repo with no installation id (dashboard, schedules) finds it once and reuses it', async () => {
+  const seen: string[] = [];
+  const fake: typeof fetch = async (url) => {
+    const u = String(url);
+    seen.push(u.replace('https://api.github.com', ''));
+    if (u.endsWith('/repos/acme/infra/installation')) return new Response(JSON.stringify({ id: 77 }));
+    if (u.endsWith('/app/installations/77/access_tokens')) return new Response(JSON.stringify({ token: 'ghs_x', expires_at: new Date(Date.now() + 3600e3).toISOString() }));
+    if (u.includes('/issues/1/comments')) return new Response(JSON.stringify({ id: 5, html_url: 'u' }), { status: 201 });
+    return new Response('{"message":"Not Found"}', { status: 404 });
+  };
+  const a = new GitHubAdapter(cfg, fake);
+  const repo = { platform: 'github' as const, host: 'github.com', owner: 'acme', name: 'infra', fullName: 'acme/infra', cloneUrl: '' };
+  assert.equal(await a.comment(repo, 1, 'hi'), '5');
+  assert.equal(await a.comment(repo, 1, 'again'), '5');
+  assert.equal(seen.filter(u => u.endsWith('/installation')).length, 1, 'looked up once');
+  // Not installed on the repo: a clear error.
+  const none = new GitHubAdapter(cfg, async () => new Response('{}', { status: 404 }));
+  await assert.rejects(none.comment({ ...repo, fullName: 'acme/other' }, 1, 'x'), /no GitHub App installation for acme\/other \(HTTP 404\); is the App installed on it\?/);
+});
