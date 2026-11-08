@@ -18,6 +18,9 @@ github:
 config:
   repoAllowlist: []             # e.g. ["github.com/acme/*"]; or list repos in `repos` below
   requireApplyProject: false    # true: no bare `tfv apply`, one project at a time with -p
+  ackReaction: eyes             # reaction on a command tfv picked up: eyes, rocket, +1, heart, hooray, laugh, confused, -1, none
+  progressReply: true           # a spinning "Running…" reply under the command that becomes the result (needs a public https URL)
+  commentMode: new              # new: a new comment per plan/apply; update: one comment at the top, edited in place
   parallelism: 4
   runTimeoutSeconds: 3600
   defaultVersion: latest        # tool version when a project pins none

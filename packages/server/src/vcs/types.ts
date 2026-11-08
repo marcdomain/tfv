@@ -68,7 +68,11 @@ export interface CloneAuth {
   extraHeader?: string;
 }
 
-export type Reaction = 'eyes' | '+1' | '-1' | 'rocket' | 'confused';
+// Reactions every supported platform can show (GitHub's set).
+export const REACTIONS = ['eyes', 'rocket', '+1', '-1', 'heart', 'hooray', 'laugh', 'confused'] as const;
+export type Reaction = typeof REACTIONS[number];
+// The reaction tfv adds to a command it picked up, or none.
+export type Ack = Reaction | 'none';
 
 export interface VcsAdapter {
   readonly platform: Platform;
@@ -83,11 +87,14 @@ export interface VcsAdapter {
   changedFiles(repo: Repo, number: number): Promise<string[]>;
   cloneAuth(repo: Repo): Promise<CloneAuth>;
 
-  // Creates or edits the comment that contains `marker`.
-  upsertComment(repo: Repo, number: number, marker: string, body: string): Promise<void>;
-  comment(repo: Repo, number: number, body: string): Promise<void>;
+  // Creates or edits the comment that contains `marker`; returns its web URL.
+  upsertComment(repo: Repo, number: number, marker: string, body: string): Promise<string | null>;
+  // Posts a comment; returns its id so it can be edited later.
+  comment(repo: Repo, number: number, body: string): Promise<string | null>;
+  editComment(repo: Repo, commentId: string, body: string): Promise<void>;
   react(repo: Repo, number: number, commentId: string, reaction: Reaction): Promise<void>;
-  setCheck(repo: Repo, check: CheckRun): Promise<void>;
+  // Creates or updates a check run; returns its web page (where its buttons are).
+  setCheck(repo: Repo, check: CheckRun): Promise<string | null>;
 
   // RBAC lookups.
   userPermission(repo: Repo, user: string): Promise<Permission>;

@@ -92,7 +92,9 @@ export const parseCommand = (body: string, names: string[]): ParseResult => {
   return { ok: true, command };
 };
 
-export const helpText = (name = 'tfv'): string => [
+// Lists only what this server allows: a bare `apply` is left out when
+// projects must be applied one at a time.
+export const helpText = (name = 'tfv', oneProjectPerApply = false): string => [
   '### tfv commands',
   '| Command | What it does |',
   '|---|---|',
@@ -100,7 +102,7 @@ export const helpText = (name = 'tfv'): string => [
   `| \`${name} plan -p <project>\` | Plan one project (\`-d <dir>\` and \`-w <workspace>\` also work) |`,
   `| \`${name} plan -p <project> -t <address>\` | Plan only some resources (repeat \`-t\` for more) |`,
   `| \`${name} plan --destroy\` | Plan destroying the selected projects |`,
-  `| \`${name} apply\` | Apply every planned project whose requirements are met (if allowed on this server) |`,
-  `| \`${name} apply -p <project>\` | Apply one project |`,
+  ...(oneProjectPerApply ? [] : [`| \`${name} apply\` | Apply every planned project whose requirements are met |`]),
+  `| \`${name} apply -p <project>\` | Apply one project${oneProjectPerApply ? ' (this server applies one project at a time)' : ''} |`,
   `| \`${name} unlock\` | Release this PR's locks and discard its plans |`,
 ].join('\n');

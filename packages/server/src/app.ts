@@ -51,6 +51,44 @@ export class Semaphore {
   }
 }
 
+// One reply per command, right under it. In "loading" mode it appears at once
+// as "⏳ Running …" and is edited into the outcome when the command finishes.
+export class Reply {
+  private adapter: VcsAdapter;
+  private repo: Repo;
+  private number: number;
+  private spinner: string | null;
+  private id: string | null = null;
+  private lines: string[] = [];
+  // `spinner` is the animated icon's URL; without one there is no "Running…" reply.
+  constructor(adapter: VcsAdapter, repo: Repo, number: number, spinner: string | null) {
+    this.adapter = adapter; this.repo = repo; this.number = number; this.spinner = spinner;
+  }
+  async start(text: string) {
+    if (!this.spinner) return;
+    // alt="👀": if GitHub can't load the picture, the eyes show instead.
+    const icon = `<img src="${this.spinner}" width="16" height="16" align="center" alt="👀">`;
+    this.id = await this.adapter.comment(this.repo, this.number, `${icon} ${text}`).catch(() => null);
+  }
+  say(text: string) { this.lines.push(text); }
+  async send() {
+    // A "Running…" reply must never be left spinning.
+    if (!this.lines.length && this.id) this.lines.push('✅ Done.');
+    if (!this.lines.length) return;
+    const body = this.lines.join('\n\n');
+    if (this.id) await this.adapter.editComment(this.repo, this.id, body);
+    else await this.adapter.comment(this.repo, this.number, body);
+    this.lines = [];
+  }
+}
+
+const sizeText = (summary: string | null): string => {
+  if (!summary) return '';
+  const x = JSON.parse(summary) as { add: number; change: number; destroy: number; replace: number; noChanges: boolean };
+  if (x.noChanges) return 'no changes';
+  return [x.add && `+${x.add}`, x.change && `~${x.change}`, x.replace && `±${x.replace}`, x.destroy && `−${x.destroy}`].filter(Boolean).join(' ') || 'outputs only';
+};
+
 export interface AppDeps {
   config: ServerConfig;
   store: Store;
@@ -70,12 +108,15 @@ interface PrContext {
   rulesConfig: RepoConfig;        // from the base branch
   warnings: string[];
   lookup: Lookup;
+  summaryUrl?: string | null;     // the summary comment, for links from replies
 }
 
 const slug = (s: string) => s.replace(/[^A-Za-z0-9._-]+/g, '_');
 
 export class App {
   private queue = new KeyedQueue();
+  // Check page per PR project (where GitHub shows the Apply button).
+  private checkUrls = new Map<string, string>();
   private sem: Semaphore;
   private deps: AppDeps;
   private checkout: typeof gitCheckout;
@@ -109,9 +150,12 @@ export class App {
           case 'pr_opened': case 'pr_updated': return await this.autoplan(adapter, policy, event.repo, number);
           case 'pr_closed': return await this.closed(event.repo, number);
           case 'comment': return await this.onComment(adapter, policy, event.repo, number, event.author, event.body, event.commentId);
-          case 'apply_button':
-            return await this.runCommand(adapter, policy, event.repo, number, event.user,
-              { verb: 'apply', project: event.project, destroy: false, targets: [], extraArgs: [] });
+          case 'apply_button': {
+            const reply = new Reply(adapter, event.repo, number, this.spinner(policy));
+            await reply.start(`Applying \`${event.project}\` (Apply button pressed by ${event.user})…`);
+            return await this.respond(reply, () => this.runCommand(adapter, policy, event.repo, number, event.user,
+              { verb: 'apply', project: event.project, destroy: false, targets: [], extraArgs: [] }, reply));
+          }
         }
       } catch (err) {
         log.error('event failed', { key, kind: event.kind, err });
@@ -187,7 +231,11 @@ export class App {
       if (d.allowed) allowedTargets.push(p);
       else notes.set(p.name, `not planned automatically: ${d.reason}. Someone allowed can comment \`tfv plan\`.`);
     }
-    await this.plans(ctx, allowedTargets, ctx.pr.author, {}, notes);
+    if (this.commentMode(ctx) === 'update') return this.plans(ctx, allowedTargets, ctx.pr.author, {}, notes);
+    if (!targets.length) return;
+    const reply = new Reply(adapter, repo, number, this.spinner(policy));
+    await reply.start(`Planning ${targets.length} project${targets.length === 1 ? '' : 's'} for \`${ctx.pr.headSha.slice(0, 7)}\`…`);
+    await this.respond(reply, () => this.plans(ctx, allowedTargets, ctx.pr.author, {}, notes, reply));
   }
 
   private async closed(repo: Repo, number: number) {
@@ -198,15 +246,41 @@ export class App {
     log.info('PR closed; cleaned up', { repo: repo.fullName, pr: number, released });
   }
 
+  private ack(policy: RepoPolicy) { return policy.ack_reaction ?? this.deps.config.ackReaction; }
+
+  // The spinner for the "Running…" reply, or null when that reply is off or GitHub
+  // couldn't load the image (no public https address).
+  private spinner(policy: RepoPolicy) {
+    return (policy.progress_reply ?? this.deps.config.progressReply) ? this.deps.config.spinnerUrl : null;
+  }
+
+  // Runs a command and always ends with its reply, even when it fails.
+  private async respond(reply: Reply, work: () => Promise<unknown>) {
+    try {
+      await work();
+    } catch (err) {
+      log.error('command failed', { err });
+      reply.say(`⚠️ tfv hit an error: ${(err as Error).message}`);
+    }
+    await reply.send();
+  }
+
   private async onComment(adapter: VcsAdapter, policy: RepoPolicy, repo: Repo, number: number, author: string, body: string, commentId: string) {
     const parsed = parseCommand(body, this.deps.config.commandNames);
     if (!parsed) return;
-    await adapter.react(repo, number, commentId, 'eyes');
+    // Acknowledge at once: a reaction on the command (👀 by default) and a
+    // spinning "Running…" reply under it that turns into the result.
+    const ack = this.ack(policy);
+    if (ack !== 'none') await adapter.react(repo, number, commentId, ack);
+    const reply = new Reply(adapter, repo, number, this.spinner(policy));
+    const line = body.split(/\r?\n/).map(l => l.trim()).find(Boolean) ?? '';
+    if (parsed.ok && parsed.command.verb !== 'help') await reply.start(`Running \`${line.slice(0, 120)}\` for ${author}…`);
     if (!parsed.ok) {
-      await adapter.comment(repo, number, `❌ ${parsed.error}`);
+      reply.say(`❌ ${parsed.error}`);
+      await reply.send();
       return;
     }
-    await this.runCommand(adapter, policy, repo, number, author, parsed.command);
+    await this.respond(reply, () => this.runCommand(adapter, policy, repo, number, author, parsed.command, reply));
   }
 
   private select(ctx: PrContext, cmd: Command, fallback: Project[]): Project[] | string {
@@ -222,50 +296,63 @@ export class App {
     return hits;
   }
 
-  private async runCommand(adapter: VcsAdapter, policy: RepoPolicy, repo: Repo, number: number, user: string, cmd: Command) {
+  private async runCommand(adapter: VcsAdapter, policy: RepoPolicy, repo: Repo, number: number, user: string, cmd: Command, reply: Reply) {
     const name = this.deps.config.commandNames[0];
     if (cmd.verb === 'help') {
-      await adapter.comment(repo, number, helpText(name));
-      return;
+      const oneAtATime = this.deps.config.requireApplyProject || policy.require_apply_project === true;
+      return reply.say(helpText(name, oneAtATime));
     }
     if (cmd.targets.length && policy.allow_targets === false) {
-      await adapter.comment(repo, number, '❌ Targeted plans are turned off for this repo (`allow_targets` in repos.yaml).');
-      return;
+      return reply.say('❌ Targeted plans are turned off for this repo (`allow_targets` in repos.yaml).');
     }
     if (cmd.extraArgs.length && !policy.allow_extra_args) {
-      await adapter.comment(repo, number, '❌ Extra arguments are turned off for this repo (`allow_extra_args` in repos.yaml).');
-      return;
+      return reply.say('❌ Extra arguments are turned off for this repo (`allow_extra_args` in repos.yaml).');
     }
 
     const ctx = await this.context(adapter, policy, repo, number);
-    if (!ctx.pr.open) {
-      await adapter.comment(repo, number, '❌ This PR is closed.');
-      return;
-    }
+    if (!ctx.pr.open) return reply.say('❌ This PR is closed.');
 
-    if (cmd.verb === 'unlock') return this.unlock(ctx, user, cmd);
+    if (cmd.verb === 'unlock') return this.unlock(ctx, user, cmd, reply);
 
     if (cmd.verb === 'plan') {
       const changed = affectedProjects(ctx.projects, await adapter.changedFiles(repo, number));
       const targets = this.select(ctx, cmd, changed);
-      if (typeof targets === 'string') return adapter.comment(repo, number, `❌ ${targets}`);
-      if (!targets.length) return adapter.comment(repo, number, 'No projects changed in this PR. Use `-p <project>` to plan one anyway.');
+      if (typeof targets === 'string') return reply.say(`❌ ${targets}`);
+      if (!targets.length) return reply.say('No projects changed in this PR. Use `-p <project>` to plan one anyway.');
       const notes = new Map<string, string>();
       const allowed: Project[] = [];
       for (const p of targets) {
         const d = await this.allowed(ctx, 'plan', user, p);
         if (d.allowed) allowed.push(p); else notes.set(p.name, `🚫 ${d.reason}`);
       }
-      await this.plans(ctx, allowed, user, { destroy: cmd.destroy, targets: cmd.targets, extraArgs: cmd.extraArgs }, notes);
+      await this.plans(ctx, allowed, user, { destroy: cmd.destroy, targets: cmd.targets, extraArgs: cmd.extraArgs }, notes, reply);
+      if (this.commentMode(ctx) === 'update' || !allowed.length) reply.say(this.planOutcome(ctx, targets, notes));
       return;
     }
 
-    return this.applyCommand(ctx, user, cmd);
+    return this.applyCommand(ctx, user, cmd, reply);
   }
 
   // ---- plan ----
 
-  private async plans(ctx: PrContext, targets: Project[], user: string, opts: { destroy?: boolean; targets?: string[]; extraArgs?: string[] }, notes: Map<string, string>) {
+  // "✅ Planned 2 projects" with each project's result and a link to the summary.
+  private planOutcome(ctx: PrContext, targets: Project[], notes: Map<string, string>): string {
+    const runs = new Map(this.deps.store.latestRuns(ctx.repoKey, ctx.pr.number, 'plan')
+      .filter(r => r.headSha === ctx.pr.headSha).map(r => [r.project, r]));
+    const lines = targets.map(p => {
+      const note = notes.get(p.name);
+      if (note) return `- \`${p.name}\`: ${note}`;
+      const r = runs.get(p.name);
+      if (!r) return `- \`${p.name}\`: not planned`;
+      if (r.status === 'failed') return `- ❌ \`${p.name}\`: plan failed`;
+      return `- ${r.destroys ? '⚠️' : r.hasChanges ? '📝' : '✅'} \`${p.name}\`: ${sizeText(r.summary)}${r.targets.length ? ' (targeted)' : ''}`;
+    });
+    const failed = targets.some(p => runs.get(p.name)?.status === 'failed' || notes.has(p.name));
+    const head = `${failed ? '⚠️' : '✅'} **Planned ${targets.length} project${targets.length === 1 ? '' : 's'}**${ctx.summaryUrl ? ` · [see the summary](${ctx.summaryUrl})` : ''}`;
+    return [head, ...lines].join('\n');
+  }
+
+  private async plans(ctx: PrContext, targets: Project[], user: string, opts: { destroy?: boolean; targets?: string[]; extraArgs?: string[] }, notes: Map<string, string>, reply?: Reply) {
     const { store } = this.deps;
     await Promise.all(targets.map(project => this.sem.use(async () => {
       const lock = store.acquireLock(ctx.repoKey, project.name, project.workspace, ctx.pr.number, user);
@@ -275,7 +362,7 @@ export class App {
       }
       await this.planProject(ctx, project, user, opts);
     })));
-    await this.refreshComment(ctx, notes);
+    await this.refreshComment(ctx, notes, new Set([...targets.map(t => t.name), ...notes.keys()]), reply);
   }
 
   private async tools(ctx: PrContext, project: Project): Promise<ToolSet> {
@@ -350,7 +437,7 @@ export class App {
     return this.deps.config.requireApplyProject || ctx.policy.require_apply_project === true || ctx.rulesConfig.require_apply_project;
   }
 
-  private async applyCommand(ctx: PrContext, user: string, cmd: Command) {
+  private async applyCommand(ctx: PrContext, user: string, cmd: Command, reply: Reply) {
     const { store } = this.deps;
     const plans = new Map(store.latestRuns(ctx.repoKey, ctx.pr.number, 'plan')
       .filter(r => r.headSha === ctx.pr.headSha)
@@ -363,22 +450,22 @@ export class App {
     if (this.oneAtATime(ctx) && !cmd.project && !cmd.dir) {
       const name = this.deps.config.commandNames[0];
       const ready = planned.map(p => `- \`${name} apply -p ${p.name}\``);
-      return ctx.adapter.comment(ctx.repo, ctx.pr.number, [
-        `@${user} this server applies one project at a time, so \`${name} apply\` on its own is turned off.`,
+      return reply.say([
+        `This server applies one project at a time, so \`${name} apply\` on its own is turned off.`,
         ready.length ? `Apply each project with:\n${ready.join('\n')}` : 'No project has a plan ready to apply yet.',
       ].join('\n\n'));
     }
 
     const selected = this.select(ctx, cmd, planned);
-    if (typeof selected === 'string') return ctx.adapter.comment(ctx.repo, ctx.pr.number, `❌ ${selected}`);
+    if (typeof selected === 'string') return reply.say(`❌ ${selected}`);
     if (!selected.length) {
-      return ctx.adapter.comment(ctx.repo, ctx.pr.number,
-        'Nothing to apply: no project has a successful plan with changes at the current commit. Run `tfv plan` first.');
+      return reply.say('Nothing to apply: no project has a successful plan with changes at the current commit. Run `tfv plan` first.');
     }
 
     const approvers = await this.approvers(ctx);
     const notes = new Map<string, string>();
     const denied: string[] = [];
+    const attempted = new Set<string>();
     for (const project of this.ordered(selected)) {
       const plan = plans.get(`${project.name}::${project.workspace}`);
       if (!plan || plan.status !== 'success' || !plan.planPath) {
@@ -404,13 +491,23 @@ export class App {
         denied.push(`- \`${project.name}\`: ${blockers.join('; ')}`);
         continue;
       }
+      attempted.add(project.name);
       await this.sem.use(() => this.applyProject(ctx, project, user, plan));
     }
 
-    await this.refreshComment(ctx, notes);
-    if (denied.length) {
-      await ctx.adapter.comment(ctx.repo, ctx.pr.number, `@${user} these projects were not applied:\n${denied.join('\n')}`);
+    const applied = this.deps.store.latestRuns(ctx.repoKey, ctx.pr.number, 'apply')
+      .filter(r => r.headSha === ctx.pr.headSha && attempted.has(r.project));
+    const done = applied.filter(r => r.status === 'success').map(r => `- ✅ \`${r.project}\`: applied`);
+    const broke = applied.filter(r => r.status === 'failed').map(r => `- ❌ \`${r.project}\`: apply failed (see the summary for the log)`);
+    const link = ctx.summaryUrl ? ` · [see the summary](${ctx.summaryUrl})` : '';
+    if (this.commentMode(ctx) === 'update') {
+      await this.refreshComment(ctx, notes);
+      if (done.length || broke.length) reply.say([`${broke.length ? '⚠️' : '✅'} **Applied ${done.length} of ${applied.length}**${ctx.summaryUrl ? ` · [see the summary](${ctx.summaryUrl})` : link}`, ...done, ...broke].join('\n'));
+    } else if (attempted.size) {
+      await this.refreshComment(ctx, new Map(), attempted, reply);
     }
+    if (denied.length) reply.say(`**Not applied:**\n${denied.join('\n')}`);
+    for (const [project, note] of notes) reply.say(`- \`${project}\`: ${note}`);
   }
 
   private async applyProject(ctx: PrContext, project: Project, user: string, plan: Run) {
@@ -433,7 +530,7 @@ export class App {
 
   // ---- unlock ----
 
-  private async unlock(ctx: PrContext, user: string, cmd: Command) {
+  private async unlock(ctx: PrContext, user: string, cmd: Command, reply: Reply) {
     const { store } = this.deps;
     // These locks belong to this PR: its author or anyone who may plan here can drop them.
     const locks = store.locksForPr(ctx.repoKey, ctx.pr.number)
@@ -448,7 +545,7 @@ export class App {
       released.push(l.project);
     }
     if (!cmd.project) store.discardPlans(ctx.repoKey, ctx.pr.number);
-    await ctx.adapter.comment(ctx.repo, ctx.pr.number, released.length
+    reply.say(released.length
       ? `🔓 Unlocked ${released.map(p => `\`${p}\``).join(', ')} and discarded the plans. Run \`tfv plan\` to plan again.`
       : 'This PR holds no locks you can release.');
   }
@@ -457,7 +554,9 @@ export class App {
 
   private async check(ctx: PrContext, check: Parameters<VcsAdapter['setCheck']>[1]) {
     if (!ctx.adapter.supportsChecks) return;
-    await ctx.adapter.setCheck(ctx.repo, { ...check, detailsUrl: `${this.deps.config.publicUrl}/` }).catch(err => log.warn('check update failed', { err }));
+    const url = await ctx.adapter.setCheck(ctx.repo, { ...check, detailsUrl: `${this.deps.config.publicUrl}/` })
+      .catch(err => { log.warn('check update failed', { err }); return null; });
+    if (url && check.externalId) this.checkUrls.set(`${ctx.repoKey}#${ctx.pr.number}#${check.externalId}`, url);
   }
 
   private async publishCheck(ctx: PrContext, project: Project, run: Run) {
@@ -476,17 +575,27 @@ export class App {
     });
   }
 
-  private async refreshComment(ctx: PrContext, notes: Map<string, string>) {
+  private commentMode(ctx: PrContext) { return ctx.policy.comment_mode ?? this.deps.config.commentMode; }
+
+  // Renders the plan report. "new" mode: only this command's projects, as the
+  // command's own reply (a new comment). "update" mode: every project, in one
+  // comment at the top that is edited in place.
+  private async refreshComment(ctx: PrContext, notes: Map<string, string>, only?: Set<string>, reply?: Reply) {
     const { store, config } = this.deps;
     const head = ctx.pr.headSha;
-    const plans = store.latestRuns(ctx.repoKey, ctx.pr.number, 'plan').filter(r => r.headSha === head);
+    const asReply = this.commentMode(ctx) === 'new' && reply;
+    const plans = store.latestRuns(ctx.repoKey, ctx.pr.number, 'plan')
+      .filter(r => r.headSha === head && (!asReply || !only || only.has(r.project)));
     const applies = new Map(store.latestRuns(ctx.repoKey, ctx.pr.number, 'apply').map(r => [`${r.project}::${r.workspace}`, r]));
     const approvers = plans.some(p => p.status === 'success' && p.hasChanges) ? await this.approvers(ctx) : [];
 
     const views: ProjectView[] = [];
     for (const plan of plans) {
       const project = ctx.projects.find(p => p.name === plan.project) ?? { name: plan.project, dir: plan.project, deps: [] } as unknown as Project;
-      const view: ProjectView = { name: plan.project, plan, apply: applies.get(`${plan.project}::${plan.workspace}`), note: notes.get(plan.project), dir: project.dir };
+      const view: ProjectView = {
+        name: plan.project, plan, apply: applies.get(`${plan.project}::${plan.workspace}`), note: notes.get(plan.project), dir: project.dir,
+        checkUrl: this.checkUrls.get(`${ctx.repoKey}#${ctx.pr.number}#${plan.project}`) ?? null,
+      };
       if (plan.status === 'success' && plan.hasChanges) {
         view.blockers = await applyBlockers(project, this.rules(ctx, project), ctx.pr, approvers, ctx.lookup);
       }
@@ -494,11 +603,16 @@ export class App {
     }
     for (const [name, note] of notes) if (!views.some(v => v.name === name)) views.push({ name, note });
     if (!views.length) return;
+    if (asReply && plans.length === 0) {
+      // Nothing ran (locked or not allowed): say why, in the reply.
+      reply.say([...notes].map(([name, note]) => `- \`${name}\`: ${note}`).join('\n'));
+      return;
+    }
     views.sort((a, b) => a.name.localeCompare(b.name));
 
     const l = repoLinks(ctx.repoKey, platformForHost(ctx.repo.host, { [ctx.repo.host]: ctx.repo.platform }));
     const body = renderComment({
-      marker: MARKER, headSha: head, command: config.commandNames[0], projects: views,
+      marker: asReply ? '<!-- tfv:report -->' : MARKER, headSha: head, command: config.commandNames[0], projects: views,
       dashboardUrl: config.publicUrl, limit: ctx.adapter.commentLimit, warnings: ctx.warnings,
       oneProjectPerApply: this.oneAtATime(ctx),
       approvers,
@@ -510,6 +624,10 @@ export class App {
         run: id => `${config.publicUrl}/#runs/${id}`,
       },
     });
-    await ctx.adapter.upsertComment(ctx.repo, ctx.pr.number, MARKER, body);
+    if (asReply) {
+      reply.say(body);
+      return;
+    }
+    ctx.summaryUrl = await ctx.adapter.upsertComment(ctx.repo, ctx.pr.number, MARKER, body);
   }
 }

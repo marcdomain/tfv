@@ -24,6 +24,9 @@ ENV NODE_ENV=production \
     TFV_DATA_DIR=/data \
     TFV_PORT=8080 \
     TFV_REQUIRE_APPLY_PROJECT=false \
+    TFV_ACK_REACTION=eyes \
+    TFV_PROGRESS_REPLY=true \
+    TFV_COMMENT_MODE=new \
     TFV_DRIFT=true \
     NODE_NO_WARNINGS=1
 

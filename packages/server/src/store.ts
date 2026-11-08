@@ -38,6 +38,44 @@ export interface Run {
   dir: string;                // project folder in the repo
 }
 
+export interface RunQuery {
+  q?: string;                 // matches project, repo, user, PR author, PR number
+  user?: string;              // ran it or opened the PR
+  project?: string;
+  repo?: string;
+  status?: 'failed' | 'applied' | 'destroys' | 'changes' | 'nochanges' | 'running';
+  kind?: 'plan' | 'apply';
+  from?: string;              // ISO time, inclusive
+  to?: string;                // ISO time, exclusive
+  sort?: 'newest' | 'oldest' | 'project' | 'user' | 'changes';
+  limit?: number;
+  offset?: number;
+}
+
+export interface AuditQuery {
+  q?: string;
+  user?: string;
+  project?: string;
+  action?: string;
+  allowed?: boolean;
+  from?: string;
+  to?: string;
+  limit?: number;
+  offset?: number;
+}
+
+export interface ProjectSummary {
+  repo: string;
+  project: string;
+  workspace: string;
+  runs: number;
+  lastRun: Run;
+  lastApply: Run | null;
+  lock: Lock | null;
+}
+
+const like = (s: string) => `%${s.replace(/[\\%_]/g, c => `\\${c}`)}%`;
+
 export interface AuditEntry {
   at: string;
   repo: string;
@@ -189,6 +227,65 @@ export class Store {
     return r ? toRun(r) : null;
   }
 
+  // Filtered, sorted, paged runs for the dashboard. Output is left out of lists.
+  searchRuns(q: RunQuery): { total: number; items: Run[] } {
+    const where: string[] = [];
+    const args: (string | number)[] = [];
+    if (q.q) {
+      where.push(`(project LIKE ? ESCAPE '\\' OR repo LIKE ? ESCAPE '\\' OR user LIKE ? ESCAPE '\\' OR pr_author LIKE ? ESCAPE '\\' OR CAST(pr AS TEXT) = ?)`);
+      const p = like(q.q.replace(/^#/, ''));
+      args.push(p, p, p, p, q.q.replace(/^#/, ''));
+    }
+    if (q.user) { where.push('(user = ? OR pr_author = ?)'); args.push(q.user, q.user); }
+    if (q.project) { where.push('project = ?'); args.push(q.project); }
+    if (q.repo) { where.push('repo = ?'); args.push(q.repo); }
+    if (q.kind) { where.push('kind = ?'); args.push(q.kind); }
+    switch (q.status) {
+      case 'failed': where.push(`status = 'failed'`); break;
+      case 'running': where.push(`status IN ('running', 'queued')`); break;
+      case 'applied': where.push(`kind = 'apply' AND status = 'success'`); break;
+      case 'destroys': where.push(`kind = 'plan' AND status = 'success' AND destroys > 0`); break;
+      case 'changes': where.push(`kind = 'plan' AND status = 'success' AND has_changes = 1`); break;
+      case 'nochanges': where.push(`kind = 'plan' AND status = 'success' AND has_changes = 0`); break;
+    }
+    if (q.from) { where.push('started_at >= ?'); args.push(q.from); }
+    if (q.to) { where.push('started_at < ?'); args.push(q.to); }
+    const w = where.length ? `WHERE ${where.join(' AND ')}` : '';
+    const size = `(COALESCE(json_extract(summary, '$.add'), 0) + COALESCE(json_extract(summary, '$.change'), 0) + COALESCE(json_extract(summary, '$.destroy'), 0) + COALESCE(json_extract(summary, '$.replace'), 0))`;
+    const order = {
+      newest: 'id DESC', oldest: 'id ASC', project: 'project ASC, id DESC', user: 'user ASC, id DESC', changes: `${size} DESC, id DESC`,
+    }[q.sort ?? 'newest'] ?? 'id DESC';
+    const limit = Math.min(200, Math.max(1, q.limit ?? 50));
+    const total = Number((this.db.prepare(`SELECT COUNT(*) AS n FROM runs ${w}`).get(...args) as { n: number }).n);
+    const items = this.db.prepare(`SELECT * FROM runs ${w} ORDER BY ${order} LIMIT ? OFFSET ?`)
+      .all(...args, limit, Math.max(0, q.offset ?? 0)).map(toRun).map(r => ({ ...r, output: '' }));
+    return { total, items };
+  }
+
+  // Values for the dashboard's filter dropdowns.
+  facets(): { users: string[]; projects: string[]; repos: string[]; actions: string[] } {
+    const col = (sql: string) => this.db.prepare(sql).all().map((r: Record<string, any>) => String(r.v)).filter(Boolean);
+    return {
+      users: col(`SELECT DISTINCT v FROM (SELECT user AS v FROM runs UNION SELECT pr_author FROM runs UNION SELECT user FROM audit) ORDER BY lower(v)`),
+      projects: col('SELECT DISTINCT project AS v FROM runs ORDER BY v'),
+      repos: col('SELECT DISTINCT repo AS v FROM runs ORDER BY v'),
+      actions: col('SELECT DISTINCT action AS v FROM audit ORDER BY v'),
+    };
+  }
+
+  // One row per project: latest run, latest successful apply, lock.
+  projectSummaries(): ProjectSummary[] {
+    const latest = this.db.prepare(`SELECT * FROM runs WHERE id IN (SELECT MAX(id) FROM runs GROUP BY repo, project, workspace) ORDER BY repo, project`).all().map(toRun);
+    const counts = new Map(this.db.prepare('SELECT repo, project, workspace, COUNT(*) AS n FROM runs GROUP BY repo, project, workspace').all()
+      .map((r: Record<string, any>) => [`${r.repo}|${r.project}|${r.workspace}`, Number(r.n)]));
+    const applies = new Map(this.db.prepare(`SELECT * FROM runs WHERE id IN (SELECT MAX(id) FROM runs WHERE kind = 'apply' AND status = 'success' GROUP BY repo, project, workspace)`).all().map(toRun)
+      .map(r => [`${r.repo}|${r.project}|${r.workspace}`, r]));
+    return latest.map(r => {
+      const k = `${r.repo}|${r.project}|${r.workspace}`;
+      return { repo: r.repo, project: r.project, workspace: r.workspace, runs: counts.get(k) ?? 0, lastRun: { ...r, output: '' }, lastApply: applies.get(k) ?? null, lock: this.getLock(r.repo, r.project, r.workspace) };
+    });
+  }
+
   // ---- drift ----
 
   // True for exactly one caller per schedule and minute, even across restarts.
@@ -225,6 +322,28 @@ export class Store {
   audit(e: Omit<AuditEntry, 'at'>): void {
     this.db.prepare('INSERT INTO audit (at, repo, pr, user, action, project, allowed, reason) VALUES (?, ?, ?, ?, ?, ?, ?, ?)')
       .run(now(), e.repo, e.pr, e.user, e.action, e.project, e.allowed ? 1 : 0, e.reason);
+  }
+
+  searchAudit(q: AuditQuery): { total: number; items: AuditEntry[] } {
+    const where: string[] = [];
+    const args: (string | number)[] = [];
+    if (q.q) {
+      where.push(`(user LIKE ? ESCAPE '\\' OR project LIKE ? ESCAPE '\\' OR reason LIKE ? ESCAPE '\\' OR repo LIKE ? ESCAPE '\\')`);
+      const p = like(q.q);
+      args.push(p, p, p, p);
+    }
+    if (q.user) { where.push('user = ?'); args.push(q.user); }
+    if (q.project) { where.push('project = ?'); args.push(q.project); }
+    if (q.action) { where.push('action = ?'); args.push(q.action); }
+    if (q.allowed !== undefined) { where.push('allowed = ?'); args.push(q.allowed ? 1 : 0); }
+    if (q.from) { where.push('at >= ?'); args.push(q.from); }
+    if (q.to) { where.push('at < ?'); args.push(q.to); }
+    const w = where.length ? `WHERE ${where.join(' AND ')}` : '';
+    const total = Number((this.db.prepare(`SELECT COUNT(*) AS n FROM audit ${w}`).get(...args) as { n: number }).n);
+    const items = this.db.prepare(`SELECT * FROM audit ${w} ORDER BY id DESC LIMIT ? OFFSET ?`)
+      .all(...args, Math.min(500, Math.max(1, q.limit ?? 100)), Math.max(0, q.offset ?? 0))
+      .map((r: Record<string, any>) => ({ at: r.at, repo: r.repo, pr: r.pr, user: r.user, action: r.action, project: r.project, allowed: !!r.allowed, reason: r.reason }));
+    return { total, items };
   }
 
   auditLog(limit = 100): AuditEntry[] {

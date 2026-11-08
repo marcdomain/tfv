@@ -55,7 +55,8 @@ class FakeGitHub implements VcsAdapter {
   readonly platform = 'github' as const;
   readonly commentLimit = 65000;
   readonly supportsChecks = true;
-  comments: { pr: number; body: string }[] = [];
+  comments: { id: string; pr: number; body: string }[] = [];
+  private seq = 0;
   sticky = new Map<number, string>();
   checks = new Map<string, CheckRun>();
   reviewsByPr = new Map<number, Review[]>();
@@ -67,10 +68,12 @@ class FakeGitHub implements VcsAdapter {
   async getPullRequest(_r: Repo, n: number) { return this.prs.get(n)!; }
   async changedFiles(_r: Repo, n: number) { return this.files.get(n) ?? []; }
   async cloneAuth() { return { url: origin }; }
-  async upsertComment(_r: Repo, n: number, _m: string, body: string) { this.sticky.set(n, body); }
-  async comment(_r: Repo, n: number, body: string) { this.comments.push({ pr: n, body }); }
-  async react() {}
-  async setCheck(_r: Repo, c: CheckRun) { this.checks.set(c.name, c); }
+  async upsertComment(_r: Repo, n: number, _m: string, body: string) { this.sticky.set(n, body); return `https://github.test/pr/${n}#summary`; }
+  async comment(_r: Repo, n: number, body: string) { const id = String(++this.seq); this.comments.push({ id, pr: n, body }); return id; }
+  async editComment(_r: Repo, id: string, body: string) { const c = this.comments.find(x => x.id === id); if (c) c.body = body; }
+  reactions: string[] = [];
+  async react(_r: Repo, _n: number, _c: string, reaction: string) { this.reactions.push(reaction); }
+  async setCheck(_r: Repo, c: CheckRun) { this.checks.set(c.name, c); return `https://github.test/runs/${encodeURIComponent(c.name)}`; }
   async userPermission(_r: Repo, u: string) { return PERMS[u] ?? 'none'; }
   async inTeam(_r: Repo, t: string, u: string) { return (TEAMS[t] ?? []).includes(u); }
   async reviews(_r: Repo, n: number) { return this.reviewsByPr.get(n) ?? []; }
@@ -108,7 +111,7 @@ before(() => {
 
   const config: ServerConfig = {
     port: 0, dataDir: join(tmp, 'data'), publicUrl: 'https://tfv.example.com', parallelism: 2, runTimeoutMs: 60_000,
-    commandNames: ['tfv', 'atlantis'], defaultVersion: 'latest', requireApplyProject: false, auth: { sessionSecret: 'x'.repeat(32), sessionHours: 1, secureCookies: false, users: [] }, channels: {}, people: [],
+    commandNames: ['tfv', 'atlantis'], defaultVersion: 'latest', requireApplyProject: false, ackReaction: 'eyes', progressReply: true, commentMode: 'update', spinnerUrl: 'https://tfv.example.com/assets/spinner.gif', auth: { sessionSecret: 'x'.repeat(32), sessionHours: 1, secureCookies: false, users: [] }, channels: {}, people: [],
     repos: parseReposYaml(`
 repos:
   - id: github.com/acme/*
@@ -163,7 +166,7 @@ test('1. push → autoplan both projects, sticky comment + checks with Apply but
 test('2. apply without approvals is refused with reasons', async () => {
   await comment(1, 'bob', 'tfv apply');
   const reply = gh.lastReply();
-  assert.match(reply, /@bob these projects were not applied/);
+  assert.match(reply, /\*\*Not applied:\*\*/);
   assert.match(reply, /`envs\/dev`: apply_destroy on `envs\/dev` needs maintain/);
   assert.match(reply, /`envs\/prod`: apply on `envs\/prod` needs team:platform-admins/);
   assert.equal(store.latestRuns('github.com/acme/infra', 1, 'apply').length, 0);
@@ -259,4 +262,85 @@ test('9. one project at a time: a bare apply is refused with exact commands; tar
   const body = gh.sticky.get(9)!;
   assert.match(body, /\| \[`envs\/dev`\]\([^)]+\) \|.*🎯 targeted \|/);
   assert.match(body, /\[!NOTE\]\n> \*\*Targeted plan:\*\* only `terraform_data.cdn`, `terraform_data.worker\[0\]`/);
+});
+
+test('10. the pick-up reaction: eyes by default, configurable per repo, or off', async () => {
+  const before = gh.reactions.length;
+  await comment(2, 'carol', 'tfv help');
+  assert.equal(gh.reactions[before], 'eyes');
+  const mk = (ack: string) => new App({
+    config: { ...(app as any).deps.config, repos: parseReposYaml(`repos:\n  - id: github.com/acme/*\n    ack_reaction: ${ack}\n`) },
+    store, resolver: (app as any).deps.resolver,
+  });
+  await mk('rocket').handle(gh, { kind: 'comment', repo, prNumber: 2, commentId: '11', author: 'carol', body: 'tfv help' });
+  assert.equal(gh.reactions.at(-1), 'rocket');
+  const n = gh.reactions.length;
+  await mk('none').handle(gh, { kind: 'comment', repo, prNumber: 2, commentId: '12', author: 'carol', body: 'tfv help' });
+  assert.equal(gh.reactions.length, n, 'no reaction when turned off');
+  assert.throws(() => parseReposYaml('repos:\n  - id: x\n    ack_reaction: thumbsup\n'), /ack_reaction must be one of eyes, rocket/);
+});
+
+test('11. defaults: ⏳ reply at once, then a NEW comment per plan with apply commands and ▶ Apply links', async () => {
+  const fresh = new App({
+    config: { ...(app as any).deps.config, ackReaction: 'eyes', progressReply: true, commentMode: 'new' },
+    store, resolver: (app as any).deps.resolver,
+  });
+  await app.handle(gh, { kind: 'pr_closed', repo, pr: pr(9, 'bob'), merged: false }); // release #9's locks
+  gh.prs.set(20, pr(20, 'bob'));
+  gh.files.set(20, ['envs/dev/main.tf', 'envs/prod/main.tf']);
+  gh.reviewsByPr.set(20, [{ user: 'carol', state: 'approved', commitSha: head }]);
+  const mine = () => gh.comments.filter(c => c.pr === 20);
+
+  await fresh.handle(gh, { kind: 'pr_opened', repo, pr: pr(20, 'bob') });
+  assert.equal(gh.sticky.get(20), undefined, 'no comment edited at the top');
+  assert.equal(mine().length, 1);
+  const first = mine()[0].body;
+  assert.doesNotMatch(first, /spinner\.gif/, 'the spinning reply was turned into the report');
+  assert.match(first, /\| Project \| Engine \| Plan \| Apply \| By \|/);
+  assert.match(first, /\*\*To apply:\*\* comment `tfv apply -p envs\/dev` or \[\*\*▶ Apply\*\*\]\(https:\/\/github\.test\/runs\/tfv%3A%20envs%2Fdev\)/);
+  assert.match(first, /- 🟢 \*\*`envs\/prod`\*\* is ready: comment `tfv apply -p envs\/prod` or \[\*\*▶ Apply\*\*\]/);
+
+  // While a command runs, its reply says so; afterwards it holds that command's report.
+  let during = '';
+  const realEdit = gh.editComment.bind(gh);
+  gh.editComment = async (r, id, body) => { during = gh.comments.find(c => c.id === id)!.body; return realEdit(r, id, body); };
+  await fresh.handle(gh, { kind: 'comment', repo, prNumber: 20, commentId: '20', author: 'bob', body: 'tfv plan -p envs/dev' });
+  gh.editComment = realEdit;
+  assert.equal(during, '<img src="https://tfv.example.com/assets/spinner.gif" width="16" height="16" align="center" alt="👀"> Running `tfv plan -p envs/dev` for bob…');
+  assert.equal(mine().length, 2, 'a new comment for the new plan');
+  assert.match(mine()[1].body, /`envs\/dev`/);
+  assert.doesNotMatch(mine()[1].body, /`envs\/prod`/, 'only the projects this command planned');
+  assert.equal(mine()[0].body, first, 'the earlier report is left as it was');
+});
+
+test('12. a spinning reply always resolves, even when every project is locked', async () => {
+  const fresh = new App({ config: { ...(app as any).deps.config, ackReaction: 'eyes', progressReply: true, commentMode: 'new' }, store, resolver: (app as any).deps.resolver });
+  gh.prs.set(21, pr(21, 'carol'));
+  gh.files.set(21, ['envs/dev/main.tf']);
+  await fresh.handle(gh, { kind: 'pr_opened', repo, pr: pr(21, 'carol') }); // #20 holds envs/dev
+  const body = gh.comments.filter(c => c.pr === 21).at(-1)!.body;
+  assert.doesNotMatch(body, /spinner\.gif/);
+  assert.match(body, /`envs\/dev`: 🔒 locked by #20/);
+});
+
+test('13. no public https address for the spinner: just the 👀 reaction, then the result', async () => {
+  const noSpin = new App({ config: { ...(app as any).deps.config, ackReaction: 'eyes', progressReply: true, commentMode: 'new', spinnerUrl: null }, store, resolver: (app as any).deps.resolver });
+  const reactions = gh.reactions.length;
+  const comments = gh.comments.length;
+  await noSpin.handle(gh, { kind: 'comment', repo, prNumber: 21, commentId: '30', author: 'carol', body: 'tfv unlock' });
+  assert.equal(gh.reactions[reactions], 'eyes');
+  assert.equal(gh.comments.length, comments + 1, 'just the result, no "Running…" reply');
+  assert.doesNotMatch(gh.comments.at(-1)!.body, /spinner/);
+});
+
+test('14. defaults together: 👀 on the command AND a spinning reply under it', async () => {
+  const both = new App({ config: { ...(app as any).deps.config, ackReaction: 'eyes', progressReply: true, commentMode: 'new' }, store, resolver: (app as any).deps.resolver });
+  const r = gh.reactions.length;
+  let first = '';
+  const realComment = gh.comment.bind(gh);
+  gh.comment = async (rp, n, body) => { if (!first) first = body; return realComment(rp, n, body); };
+  await both.handle(gh, { kind: 'comment', repo, prNumber: 21, commentId: '40', author: 'carol', body: 'tfv unlock' });
+  gh.comment = realComment;
+  assert.equal(gh.reactions[r], 'eyes');
+  assert.match(first, /^<img src="https:\/\/tfv\.example\.com\/assets\/spinner\.gif"[^>]*alt="👀"> Running `tfv unlock` for carol…$/);
 });

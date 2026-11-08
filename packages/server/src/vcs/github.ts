@@ -227,16 +227,23 @@ export class GitHubAdapter implements VcsAdapter {
 
   // ---- writing to the PR ----
 
-  async upsertComment(repo: Repo, number: number, marker: string, body: string): Promise<void> {
+  async upsertComment(repo: Repo, number: number, marker: string, body: string): Promise<string | null> {
     const comments = await this.paginate<any>(repo, `/repos/${repo.fullName}/issues/${number}/comments`);
     const mine = comments.find(c => c.performed_via_github_app?.id === Number(this.cfg.appId) && c.body?.includes(marker))
       ?? comments.find(c => c.user?.type === 'Bot' && c.body?.includes(marker));
-    if (mine) await this.api(repo, 'PATCH', `/repos/${repo.fullName}/issues/comments/${mine.id}`, { body });
-    else await this.api(repo, 'POST', `/repos/${repo.fullName}/issues/${number}/comments`, { body });
+    const { data } = mine
+      ? await this.api(repo, 'PATCH', `/repos/${repo.fullName}/issues/comments/${mine.id}`, { body })
+      : await this.api(repo, 'POST', `/repos/${repo.fullName}/issues/${number}/comments`, { body });
+    return data?.html_url ?? null;
   }
 
-  async comment(repo: Repo, number: number, body: string): Promise<void> {
-    await this.api(repo, 'POST', `/repos/${repo.fullName}/issues/${number}/comments`, { body });
+  async comment(repo: Repo, number: number, body: string): Promise<string | null> {
+    const { data } = await this.api(repo, 'POST', `/repos/${repo.fullName}/issues/${number}/comments`, { body });
+    return data?.id != null ? String(data.id) : null;
+  }
+
+  async editComment(repo: Repo, commentId: string, body: string): Promise<void> {
+    await this.api(repo, 'PATCH', `/repos/${repo.fullName}/issues/comments/${encodeURIComponent(commentId)}`, { body });
   }
 
   async react(repo: Repo, _number: number, commentId: string, reaction: Reaction): Promise<void> {
@@ -247,7 +254,7 @@ export class GitHubAdapter implements VcsAdapter {
     }
   }
 
-  async setCheck(repo: Repo, check: CheckRun): Promise<void> {
+  async setCheck(repo: Repo, check: CheckRun): Promise<string | null> {
     const body: Record<string, unknown> = {
       name: check.name,
       head_sha: check.headSha,
@@ -261,8 +268,10 @@ export class GitHubAdapter implements VcsAdapter {
     const { data } = await this.api(repo, 'GET',
       `/repos/${repo.fullName}/commits/${check.headSha}/check-runs?check_name=${encodeURIComponent(check.name)}&filter=latest`);
     const existing = data.check_runs?.find((c: any) => c.app?.id === Number(this.cfg.appId)) ?? data.check_runs?.[0];
-    if (existing) await this.api(repo, 'PATCH', `/repos/${repo.fullName}/check-runs/${existing.id}`, body);
-    else await this.api(repo, 'POST', `/repos/${repo.fullName}/check-runs`, body);
+    const { data: saved } = existing
+      ? await this.api(repo, 'PATCH', `/repos/${repo.fullName}/check-runs/${existing.id}`, body)
+      : await this.api(repo, 'POST', `/repos/${repo.fullName}/check-runs`, body);
+    return saved?.html_url ?? null;
   }
 
   // ---- RBAC lookups ----

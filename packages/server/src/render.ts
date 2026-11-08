@@ -135,6 +135,7 @@ export interface ProjectView {
   blockers?: string[];        // what stops apply, if anything
   note?: string;              // e.g. "locked by #12"
   dir?: string;               // project folder, for links
+  checkUrl?: string | null;   // the project's check page, where the Apply button is
 }
 
 // Links and pictures for people and code (source-control specific).
@@ -181,16 +182,31 @@ const planCell = (v: ProjectView): string => {
   return `${s.destroy || s.replace ? '⚠️' : '📝'} **${parts.join(' ') || 'outputs'}**${targeted}`;
 };
 
-const applyCell = (v: ProjectView): string => {
+type ApplyState = 'applying' | 'applied' | 'apply-failed' | 'none' | 'blocked' | 'ready';
+
+const applyState = (v: ProjectView): ApplyState => {
   const a = v.apply;
   if (a && a.headSha === v.plan?.headSha && a.id > (v.plan?.id ?? 0)) {
-    if (a.status === 'running') return '⏳ applying…';
-    return a.status === 'success' ? '✅ applied' : '❌ apply failed';
+    if (a.status === 'running') return 'applying';
+    return a.status === 'success' ? 'applied' : 'apply-failed';
   }
   const s = parse(v.plan);
-  if (!v.plan || v.plan.status !== 'success' || !s || s.noChanges) return '—';
-  if (v.blockers?.length) return `🔒 ${v.blockers.join('; ')}`;
-  return '🟢 ready';
+  if (!v.plan || v.plan.status !== 'success' || !s || s.noChanges) return 'none';
+  return v.blockers?.length ? 'blocked' : 'ready';
+};
+
+// GitHub can't put buttons in a comment; this links to the check page that has one.
+const applyLink = (v: ProjectView) => (v.checkUrl ? ` · [**▶ Apply**](${v.checkUrl})` : '');
+
+const applyCell = (v: ProjectView): string => {
+  switch (applyState(v)) {
+    case 'applying': return '⏳ applying…';
+    case 'applied': return '✅ applied';
+    case 'apply-failed': return '❌ apply failed';
+    case 'none': return '—';
+    case 'blocked': return `🔒 ${v.blockers!.join('; ')}`;
+    case 'ready': return `🟢 ready${applyLink(v)}`;
+  }
 };
 
 export const renderComment = (input: CommentInput): string => {
@@ -209,9 +225,9 @@ export const renderComment = (input: CommentInput): string => {
   head.push(`### ${icon} tfv · ${projects.length} project${projects.length === 1 ? '' : 's'} · ${shaText}`);
 
   // One line of counts, so the state is clear before any detail.
-  const ready = projects.filter(v => applyCell(v) === '🟢 ready');
-  const waiting = projects.filter(v => v.blockers?.length && applyCell(v).startsWith('🔒'));
-  const applied = projects.filter(v => applyCell(v) === '✅ applied');
+  const ready = projects.filter(v => applyState(v) === 'ready');
+  const waiting = projects.filter(v => applyState(v) === 'blocked');
+  const applied = projects.filter(v => applyState(v) === 'applied');
   const stats = [
     dangerous.length && `⚠️ ${dangerous.length} to destroy or replace`,
     ready.length && `🟢 ${ready.length} ready to apply`,
@@ -242,8 +258,11 @@ export const renderComment = (input: CommentInput): string => {
 
   // What to do next, per project.
   const steps: string[] = [];
-  for (const v of ready) steps.push(`- 🟢 **\`${v.name}\`** is ready: comment \`${command} apply -p ${v.name}\``);
-  if (ready.length > 1 && !input.oneProjectPerApply) steps.push(`- or \`${command} apply\` to apply all ${ready.length} ready projects`);
+  for (const v of ready) steps.push(`- 🟢 **\`${v.name}\`** is ready: comment \`${command} apply -p ${v.name}\`${v.checkUrl ? ` or [**▶ Apply**](${v.checkUrl})` : ''}`);
+  // Only where this server lets one command apply several projects.
+  if (ready.length > 1 && !input.oneProjectPerApply) {
+    steps.push(`- or comment \`${command} apply\` to apply ${ready.length === 2 ? 'both' : `all ${ready.length}`} ready projects`);
+  }
   for (const v of waiting) steps.push(`- 🔒 **\`${v.name}\`** needs ${v.blockers!.join('; ')}`);
   for (const v of projects.filter(x => x.plan?.status === 'failed')) {
     steps.push(`- ❌ **\`${v.name}\`** failed: fix it and push, or comment \`${command} plan -p ${v.name}\``);
@@ -263,7 +282,13 @@ export const renderComment = (input: CommentInput): string => {
     const s = parse(v.plan);
     const lines: string[] = [];
     const title = v.plan?.status === 'failed' ? 'plan failed' : s ? countsText(s) : (v.note ?? 'not planned');
-    lines.push('', `<details${v.plan?.status === 'failed' ? ' open' : ''}><summary><b>${v.name}</b> — ${title}</summary>`, '');
+    // The body sits in a blockquote so it renders indented under the project.
+    lines.push('', `<details${v.plan?.status === 'failed' ? ' open' : ''}><summary><b>${v.name}</b> — ${title}</summary>`, '<blockquote>', '');
+    if (applyState(v) === 'ready') {
+      lines.push(`**To apply:** comment \`${command} apply -p ${v.name}\`${v.checkUrl ? ` or [**▶ Apply**](${v.checkUrl})` : ''}`, '');
+    } else if (applyState(v) === 'blocked') {
+      lines.push(`**To apply:** ${v.blockers!.join('; ')}, then comment \`${command} apply -p ${v.name}\``, '');
+    }
     if (v.plan && links?.run) lines.push(`[Open in the tfv dashboard](${links.run(v.plan.id)})`, '');
     if (v.plan?.targets?.length) {
       lines.push(`> [!NOTE]\n> **Targeted plan:** only ${v.plan.targets.map(t => `\`${t}\``).join(', ')}. Other changes in this project are not included. Plan without \`-t\` for the full picture.`, '');
@@ -287,8 +312,8 @@ export const renderComment = (input: CommentInput): string => {
     return parts.join('\n\n');
   });
 
-  const fixed = [head.join('\n'), ...sections.map(s => `${s.text}\n</details>`), footer.join('\n')].join('\n').length;
-  const wrapper = '\n\n<details><summary>Output</summary>\n\n```\n\n```\n</details>\n'.length + 60;
+  const fixed = [head.join('\n'), ...sections.map(s => `${s.text}\n\n</blockquote>\n</details>`), footer.join('\n')].join('\n').length;
+  const wrapper = '\n\n<details><summary>Output</summary>\n\n```\n\n```\n</details>\n</blockquote>\n'.length + 60;
   const withOutput = outputs.filter(Boolean).length;
   const budget = withOutput ? Math.floor((input.limit - fixed - withOutput * wrapper - 200) / withOutput) : 0;
 
@@ -302,7 +327,7 @@ export const renderComment = (input: CommentInput): string => {
         body.push('', `_Output too long for a comment; see the check run${input.dashboardUrl ? ' or dashboard' : ''}._`);
       }
     }
-    body.push('</details>');
+    body.push('', '</blockquote>', '</details>');
   });
   body.push(footer.join('\n'));
   const text = body.join('\n');

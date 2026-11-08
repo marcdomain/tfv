@@ -58,3 +58,11 @@ test('targets: repeatable, need a project, plan only, addresses only', () => {
   assert.match((parseCommand('tfv plan -p x -t "a b"', names) as { error: string }).error, /is not a resource address/);
   assert.match((parseCommand('tfv plan -p x -t $(whoami)', names) as { error: string }).error, /is not a resource address/);
 });
+
+test('help lists only what the server allows', async () => {
+  const { helpText } = await import('../src/commands.ts');
+  assert.match(helpText('tfv'), /\| `tfv apply` \| Apply every planned project/);
+  const strict = helpText('tfv', true);
+  assert.doesNotMatch(strict, /\| `tfv apply` \|/);
+  assert.match(strict, /\| `tfv apply -p <project>` \| Apply one project \(this server applies one project at a time\) \|/);
+});
