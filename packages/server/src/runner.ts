@@ -1,6 +1,6 @@
 // Runs plan / apply for one project with the exact tool versions it pins.
 import { spawn } from 'node:child_process';
-import { mkdirSync, existsSync, rmSync } from 'node:fs';
+import { mkdirSync, existsSync, rmSync, writeFileSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import type { Project } from './discovery.ts';
 import type { Provider } from './tfv.ts';
@@ -125,6 +125,8 @@ export interface PlanResult {
   output: string;
   summary: PlanSummary | null;
   hasChanges: boolean;
+  plan?: Record<string, any>;  // full `show -json` output
+  planJsonPath?: string;       // the same, written next to the plan file
 }
 
 const steps = (ctx: RunContext) => {
@@ -179,15 +181,20 @@ export const plan = async (ctx: RunContext, opts: { destroy?: boolean; targets?:
 
   const show = await run(['show', '-json', ctx.planPath], [], true);
   let summary: PlanSummary | null = null;
+  let parsed: Record<string, any> | undefined;
+  let planJsonPath: string | undefined;
   try {
     // Terragrunt may print log lines before the JSON.
     const json = show.stdout.slice(show.stdout.indexOf('{'));
-    summary = summarizePlan(JSON.parse(json));
+    parsed = JSON.parse(json);
+    summary = summarizePlan(parsed!);
+    planJsonPath = `${ctx.planPath}.json`;
+    writeFileSync(planJsonPath, json);
   } catch {
     log.push('[tfv] could not read the plan as JSON; showing raw output only');
   }
   const hasChanges = summary ? !summary.noChanges : p.code === 2;
-  return { ok: true, output: log.join('\n'), summary, hasChanges };
+  return { ok: true, output: log.join('\n'), summary, hasChanges, plan: parsed, planJsonPath };
 };
 
 export const apply = async (ctx: RunContext): Promise<{ ok: boolean; output: string }> => {

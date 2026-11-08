@@ -193,3 +193,9 @@ tr.click a.plain { position: relative; }
 .links a { display: inline-flex; align-items: center; gap: 6px; }
 .connected { display: inline-flex; gap: 6px; align-items: center; padding: 5px 10px; border: 1px solid var(--line);
   border-radius: 999px; color: var(--ink); font-weight: 600; background: var(--bg); }
+
+/* sub-tabs */
+.tabs { display: flex; gap: 4px; border-bottom: 1px solid var(--line); }
+.tabs a { padding: 9px 14px; text-decoration: none; color: var(--muted); font-weight: 600; border-bottom: 2px solid transparent; margin-bottom: -1px; }
+.tabs a[aria-selected="true"] { color: var(--accent); border-bottom-color: var(--accent); }
+.tabs a:hover { color: var(--ink); }

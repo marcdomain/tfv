@@ -68,7 +68,7 @@ class FakeGitHub implements VcsAdapter {
   async getPullRequest(_r: Repo, n: number) { return this.prs.get(n)!; }
   async changedFiles(_r: Repo, n: number) { return this.files.get(n) ?? []; }
   async cloneAuth() { return { url: origin }; }
-  async upsertComment(_r: Repo, n: number, _m: string, body: string) { this.sticky.set(n, body); return `https://github.test/pr/${n}#summary`; }
+  async upsertComment(_r: Repo, n: number, _m: string, body: string) { this.sticky.set(n, body); return { id: `s${n}`, url: `https://github.test/pr/${n}#summary` }; }
   async comment(_r: Repo, n: number, body: string) { const id = String(++this.seq); this.comments.push({ id, pr: n, body }); return id; }
   async editComment(_r: Repo, id: string, body: string) { const c = this.comments.find(x => x.id === id); if (c) c.body = body; }
   reactions: string[] = [];
@@ -111,7 +111,7 @@ before(() => {
 
   const config: ServerConfig = {
     port: 0, dataDir: join(tmp, 'data'), publicUrl: 'https://tfv.example.com', parallelism: 2, runTimeoutMs: 60_000,
-    commandNames: ['tfv', 'atlantis'], defaultVersion: 'latest', requireApplyProject: false, ackReaction: 'eyes', progressReply: true, commentMode: 'update', spinnerUrl: 'https://tfv.example.com/assets/spinner.gif', auth: { sessionSecret: 'x'.repeat(32), sessionHours: 1, secureCookies: false, users: [] }, channels: {}, people: [],
+    commandNames: ['tfv'], defaultVersion: 'latest', requireApplyProject: false, ackReaction: 'eyes', progressReply: true, commentMode: 'update', spinnerUrl: 'https://tfv.example.com/assets/spinner.gif', auth: { sessionSecret: 'x'.repeat(32), sessionHours: 1, secureCookies: false, users: [] }, channels: {}, people: [],
     repos: parseReposYaml(`
 repos:
   - id: github.com/acme/*
@@ -149,7 +149,7 @@ test('1. push → autoplan both projects, sticky comment + checks with Apply but
   assert.ok(body.startsWith(MARKER));
   assert.match(body, /tfv · 2 projects/);
   assert.match(body, /\[!CAUTION\]/);
-  assert.match(body, /\| \[`envs\/dev`\]\([^)]+\) \| terraform 1\.9\.8 \| ⚠️ \*\*\+3 ~1 ±1 −1\*\* \| 🔒 1 more approval from write \|/);
+  assert.match(body, /\| \[`envs\/dev`\]\([^)]+\) \| terraform 1\.9\.8 \| terraform \(built-in\) \| ⚠️ \*\*\+3 ~1 ±1 −1\*\* \| 🔒 1 more approval from write \|/);
   assert.match(body, /\| \[`envs\/prod`\]\([^)]+\) \|.*\| 🔒 1 more approval from team:platform-admins \|/);
   // Rich parts: counts, who ran it (avatar + profile link, no @mention), next steps.
   assert.match(body, /<sub>⚠️ 4 to destroy or replace · 🔒 2 waiting<\/sub>/);
@@ -184,7 +184,7 @@ test('3. stale approvals do not count; fresh ones do', async () => {
   assert.doesNotMatch(applies[0].output, /LEAK/); // server secrets stripped from terraform's env
   assert.match(gh.sticky.get(1)!, /\| \[`envs\/dev`\]\([^)]+\) \|.*\| ✅ applied \|/);
   assert.match(gh.sticky.get(1)!, /\*\*Approved by\*\* <img src="https:\/\/github\.com\/carol\.png\?size=36"[^>]*> \[carol\]\(https:\/\/github\.com\/carol\)/);
-  assert.match(gh.sticky.get(1)!, /- 🟢 \*\*`envs\/prod`\*\* is ready: comment `tfv apply -p envs\/prod`/);
+  assert.match(gh.sticky.get(1)!, /- 🟢 \*\*`envs\/prod`\*\* is ready\. Comment this[^\n]*:\n  ```\n  tfv apply -p envs\/prod\n  ```/);
 });
 
 test('4. Apply button on prod: a platform-admin applies after a team approval', async () => {
@@ -208,7 +208,7 @@ test('5. a second PR is blocked by the lock, and unblocked after merge', async (
   assert.equal(store.locksForPr('github.com/acme/infra', 1).length, 0);
 
   await comment(2, 'carol', 'tfv plan');
-  assert.match(gh.sticky.get(2)!, /\| \[`envs\/dev`\]\([^)]+\) \| terraform 1\.9\.8 \| ⚠️/);
+  assert.match(gh.sticky.get(2)!, /\| \[`envs\/dev`\]\([^)]+\) \| terraform 1\.9\.8 \| terraform \(built-in\) \| ⚠️/);
 });
 
 test('6. read-only users cannot run code; fork-style autoplan is held', async () => {
@@ -251,7 +251,7 @@ test('9. one project at a time: a bare apply is refused with exact commands; tar
   await strict.handle(gh, { kind: 'comment', repo, prNumber: 9, commentId: '9', author: 'erin', body: 'tfv apply' });
   const reply = gh.lastReply();
   assert.match(reply, /applies one project at a time/);
-  assert.match(reply, /- `tfv apply -p envs\/dev`\n- `tfv apply -p envs\/prod`/);
+  assert.match(reply, /```\ntfv apply -p envs\/dev\n```\n\n```\ntfv apply -p envs\/prod\n```/);
   assert.equal(store.latestRuns('github.com/acme/infra', 9, 'apply').length, 0);
   assert.match(gh.sticky.get(9)!, /Apply one project at a time: `tfv apply -p <project>`/);
 
@@ -296,9 +296,9 @@ test('11. defaults: ⏳ reply at once, then a NEW comment per plan with apply co
   assert.equal(mine().length, 1);
   const first = mine()[0].body;
   assert.doesNotMatch(first, /spinner\.gif/, 'the spinning reply was turned into the report');
-  assert.match(first, /\| Project \| Engine \| Plan \| Apply \| By \|/);
-  assert.match(first, /\*\*To apply:\*\* comment `tfv apply -p envs\/dev` or \[\*\*▶ Apply\*\*\]\(https:\/\/github\.test\/runs\/tfv%3A%20envs%2Fdev\)/);
-  assert.match(first, /- 🟢 \*\*`envs\/prod`\*\* is ready: comment `tfv apply -p envs\/prod` or \[\*\*▶ Apply\*\*\]/);
+  assert.match(first, /\| Project \| Engine \| Providers \| Plan \| Apply \| By \|/);
+  assert.match(first, /\*\*To apply:\*\* comment this, or \[\*\*▶ Apply\*\*\]\(https:\/\/github\.test\/runs\/tfv%3A%20envs%2Fdev\):\n```\ntfv apply -p envs\/dev\n```/);
+  assert.match(first, /- 🟢 \*\*`envs\/prod`\*\* is ready\. Comment this, or \[\*\*▶ Apply\*\*\]\([^)]+\):\n  ```\n  tfv apply -p envs\/prod\n  ```/);
 
   // While a command runs, its reply says so; afterwards it holds that command's report.
   let during = '';
@@ -343,4 +343,86 @@ test('14. defaults together: 👀 on the command AND a spinning reply under it',
   gh.comment = realComment;
   assert.equal(gh.reactions[r], 'eyes');
   assert.match(first, /^<img src="https:\/\/tfv\.example\.com\/assets\/spinner\.gif"[^>]*alt="👀"> Running `tfv unlock` for carol…$/);
+});
+
+test('15. policy checks (enforce + override) and the two-person rule', async () => {
+  await app.handle(gh, { kind: 'pr_closed', repo, pr: pr(20, 'bob'), merged: false }); // free envs/dev, envs/prod
+  const strict = new App({
+    config: {
+      ...(app as any).deps.config, commentMode: 'update',
+      repos: parseReposYaml('repos:\n  - id: github.com/acme/*\n    two_person_rule: true\n    projects:\n      - match: "**"\n        permissions: { apply_destroy: [write] }\n'),
+      policies: {
+        mode: 'enforce', override: ['team:platform-admins'],
+        rules: [{ name: 'no-prod-destroy', projects: ['envs/prod'], actions: ['delete', 'replace'], message: 'needs a security override' }],
+      },
+    },
+    store, resolver: (app as any).deps.resolver,
+  });
+  gh.prs.set(30, pr(30, 'alice'));
+  gh.files.set(30, ['envs/prod/main.tf']);
+  await strict.handle(gh, { kind: 'pr_opened', repo, pr: pr(30, 'alice') });
+  const body = gh.sticky.get(30)!;
+  assert.match(body, /🛡️ 2 policy findings/);
+  assert.match(body, /🛡️ \*\*Policy \(enforced: blocks apply\):\*\* 2 findings/);
+  assert.match(body, /🔴 \*\*no-prod-destroy\*\* · `terraform_data\.database` · needs a security override/);
+  assert.match(body, /\*\*To apply \(someone other than alice\):\*\* first 2 policy findings \(no-prod-destroy\)\. Then comment:\n```\ntfv apply -p envs\/prod\n```/);
+
+  const say = async (user: string, text: string) => {
+    await strict.handle(gh, { kind: 'comment', repo, prNumber: 30, commentId: String(Math.random()), author: user, body: text });
+    return gh.lastReply();
+  };
+  assert.match(await say('alice', 'tfv apply -p envs/prod'), /two-person rule: someone other than the PR author \(alice\) must apply/);
+  assert.match(await say('erin', 'tfv apply -p envs/prod'), /2 policy findings \(no-prod-destroy\)/);
+  assert.match(await say('erin', 'tfv apply -p envs/prod --override'), /`--override` needs team:platform-admins/);
+  await say('carol', 'tfv apply -p envs/prod --override'); // platform-admins team member
+  const applied = store.latestRuns('github.com/acme/infra', 30, 'apply');
+  assert.deepEqual(applied.map(r => [r.project, r.status, r.user]), [['envs/prod', 'success', 'carol']]);
+
+  const overrides = store.auditLog(50).filter(a => a.action === 'override' && a.pr === 30);
+  assert.deepEqual(overrides.map(a => [a.user, a.allowed]), [['carol', true], ['erin', false]]);
+  const found = store.searchFindings({ project: 'envs/prod', rule: 'no-prod-destroy' });
+  assert.ok(found.total >= 2);
+  assert.equal(found.items[0].mode, 'enforce');
+});
+
+test('16. audit mode reports findings without blocking', async () => {
+  await app.handle(gh, { kind: 'pr_closed', repo, pr: pr(30, 'alice'), merged: false });
+  const audit = new App({
+    config: {
+      ...(app as any).deps.config, commentMode: 'update',
+      repos: parseReposYaml('repos:\n  - id: github.com/acme/*\n'),
+      policies: { mode: 'audit', rules: [{ name: 'no-destroy', actions: ['delete'] }] },
+    },
+    store, resolver: (app as any).deps.resolver,
+  });
+  gh.prs.set(31, pr(31, 'bob'));
+  gh.files.set(31, ['envs/dev/main.tf']);
+  await audit.handle(gh, { kind: 'pr_opened', repo, pr: pr(31, 'bob') });
+  const body = gh.sticky.get(31)!;
+  assert.match(body, /🛡️ \*\*Policy \(audit: not blocking\):\*\* 1 finding/);
+  assert.match(body, /\| 🟢 ready/);
+});
+
+test('someone edits or deletes a tfv comment: left as is; warning links to it with the original; audited', async () => {
+  await comment(1, 'bob', 'tfv plan -p envs/dev');
+  const mine = gh.comments.filter(c => c.pr === 1 && c.body.includes('envs/dev')).at(-1)!;
+  const original = mine.body;
+  // A user with write access rewrites tfv's comment to hide the destroy.
+  mine.body = 'No changes 🙂';
+  await app.handle(gh, { kind: 'bot_comment_changed', repo, prNumber: 1, commentId: mine.id, by: 'mallory', change: 'edited', body: 'No changes 🙂' });
+  assert.equal(mine.body, 'No changes 🙂', 'not restored');
+  const warning = gh.comments.at(-1)!.body;
+  assert.match(warning, new RegExp(`\\*\\*\\[tfv's comment\\]\\(https://github\\.com/acme/infra/pull/1#issuecomment-${mine.id}\\) was edited by mallory\\.\\*\\*`));
+  assert.match(warning, /<details><summary>View the original<\/summary>/);
+  assert.ok(warning.includes(original.replace(/<!--\s*tfv:[^>]*-->\n?/g, '')), 'carries the original');
+  assert.doesNotMatch(warning, /<!-- tfv:/, 'no hidden markers in the copy');
+  // Deleted.
+  await app.handle(gh, { kind: 'bot_comment_changed', repo, prNumber: 1, commentId: mine.id, by: 'mallory', change: 'deleted', body: '' });
+  assert.match(gh.comments.at(-1)!.body, /A tfv comment was deleted by mallory[\s\S]*View the original/);
+  const actions = store.searchAudit({}).items.map(a => a.action);
+  assert.ok(actions.includes('comment_edited') && actions.includes('comment_deleted'));
+  // A comment tfv didn't write: left alone.
+  const before = gh.comments.length;
+  await app.handle(gh, { kind: 'bot_comment_changed', repo, prNumber: 1, commentId: 'not-ours', by: 'x', change: 'edited', body: '' });
+  assert.equal(gh.comments.length, before);
 });

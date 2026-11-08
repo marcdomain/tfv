@@ -1,5 +1,5 @@
 // Server configuration: environment variables plus the server-side repos.yaml
-// policy file. Repo-side files (tfv.yaml / atlantis.yaml) are in repoConfig.ts.
+// policy file. The repo-side tfv.yaml is in repoConfig.ts.
 import { readFileSync, existsSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import YAML from 'yaml';
@@ -7,6 +7,7 @@ import { parseCron, validTimeZone } from './cron.ts';
 import { randomBytes } from 'node:crypto';
 import type { AuthConfig, DashboardUser } from './auth.ts';
 import { REACTIONS, type Ack } from './vcs/types.ts';
+import { validatePolicies, type PolicyConfig } from './policies.ts';
 
 export type Requirement = 'approved' | 'mergeable' | 'undiverged';
 export const REQUIREMENTS: Requirement[] = ['approved', 'mergeable', 'undiverged'];
@@ -28,12 +29,13 @@ export interface ProjectRule {
   permissions?: Partial<Record<Action, Principal[]>>;
   approvals?: ApprovalRule[];
   apply_requirements?: Requirement[];
+  two_person_rule?: boolean;                  // the PR author may not apply
 }
 
 export interface RepoPolicy {
   id: string;                                 // glob on "host/owner/name"
   apply_requirements?: Requirement[];
-  allow_repo_config?: boolean;                // read tfv.yaml / atlantis.yaml (default true)
+  allow_repo_config?: boolean;                // read the repo's tfv.yaml (default true)
   allow_extra_args?: boolean;                 // `tfv plan -- -var=x` (default false)
   autoplan?: boolean;                         // default true
   plan_drafts?: boolean;                      // default false
@@ -42,6 +44,8 @@ export interface RepoPolicy {
   allow_targets?: boolean;                    // `tfv plan -t <address>` (default true)
   ack_reaction?: Ack;                         // reaction on a command tfv picked up (default: server setting)
   progress_reply?: boolean;                   // spinning "Running…" reply under the command (default: server setting)
+  two_person_rule?: boolean;                  // the PR author may not apply (any project in the repo)
+  policies?: PolicyConfig;                    // extra policy rules / stricter mode for this repo
   comment_mode?: 'new' | 'update';            // new comment per plan, or one comment edited in place
   projects?: ProjectRule[];
   drift?: DriftSchedule[];                    // server-side schedules (id must be one repo)
@@ -85,6 +89,7 @@ export interface ServerPolicy {
   channels: Record<string, ChannelConfig>;
   people: Person[];
   users: DashboardUser[];                     // dashboard username/password sign-in
+  policies?: PolicyConfig;                    // policy checks for every repo
 }
 
 export interface GitHubConfig {
@@ -100,12 +105,13 @@ export interface ServerConfig {
   dataDir: string;
   publicUrl: string;
   parallelism: number;
+  prParallelism?: number;                     // TFV_PR_PARALLELISM: one PR's share (default parallelism - 1)
   runTimeoutMs: number;                       // per terraform command
-  commandNames: string[];                     // comment prefixes, e.g. ["tfv", "atlantis"]
+  commandNames: string[];                     // comment prefixes, e.g. ["tfv"]
   defaultVersion: string;                     // when a project pins nothing
   requireApplyProject: boolean;               // TFV_REQUIRE_APPLY_PROJECT: no bare `tfv apply` anywhere
   ackReaction: Ack;                           // TFV_ACK_REACTION: reaction on the command (default eyes), or none
-  progressReply: boolean;                     // TFV_PROGRESS_REPLY: spinning "Running…" reply (default on)
+  progressReply: boolean;                     // TFV_PROGRESS_REPLY: spinning "Running…" reply, edited into the result (default off)
   commentMode: 'new' | 'update';              // TFV_COMMENT_MODE: a new comment per plan (default) or one updated comment
   spinnerUrl: string | null;                  // animated icon GitHub can load; null → fall back to 👀
   github?: GitHubConfig;
@@ -113,6 +119,7 @@ export interface ServerConfig {
   channels: Record<string, ChannelConfig>;
   people: Person[];
   auth: AuthConfig;
+  policies?: PolicyConfig;
 }
 
 const readSecret = (env: NodeJS.ProcessEnv, name: string): string | undefined => {
@@ -187,7 +194,9 @@ export const parseServerPolicy = (text: string): ServerPolicy => {
     if (/[*?]/.test(r.id)) throw new Error(`repos[${i}]: drift schedules need an exact repo id, not a glob ("${r.id}")`);
     validateDrift(r.drift, `repos[${i}].drift`, channels);
   }
-  return { repos, channels, people, users };
+  const policies = validatePolicies(doc.policies, 'policies');
+  for (const [i, r] of repos.entries()) r.policies = validatePolicies(r.policies, `repos[${i}].policies`);
+  return { repos, channels, people, users, policies };
 };
 
 export const parseUsers = (list: unknown, where: string): DashboardUser[] => {
@@ -304,7 +313,6 @@ export const loadConfig = (env: NodeJS.ProcessEnv = process.env): ServerConfig =
   if (!github) throw new Error('No source-control platform configured (set TFV_GITHUB_APP_ID and friends)');
 
   const commandNames = ['tfv'];
-  if (env.TFV_ATLANTIS_COMPAT !== 'false') commandNames.push('atlantis');
 
   const publicUrl = (env.TFV_PUBLIC_URL || `http://localhost:${port}`).replace(/\/+$/, '');
   return {
@@ -312,18 +320,20 @@ export const loadConfig = (env: NodeJS.ProcessEnv = process.env): ServerConfig =
     dataDir,
     publicUrl,
     parallelism: Math.max(1, Number(env.TFV_PARALLELISM || 4)),
+    prParallelism: env.TFV_PR_PARALLELISM ? Math.max(1, Number(env.TFV_PR_PARALLELISM)) : undefined,
     runTimeoutMs: Math.max(60, Number(env.TFV_RUN_TIMEOUT_SECONDS || 3600)) * 1000,
     commandNames,
     defaultVersion: env.TFV_DEFAULT_VERSION || 'latest',
     requireApplyProject: env.TFV_REQUIRE_APPLY_PROJECT === 'true',
     ackReaction: parseReaction(env.TFV_ACK_REACTION, 'TFV_ACK_REACTION') ?? 'eyes',
-    progressReply: env.TFV_PROGRESS_REPLY !== 'false',
+    progressReply: env.TFV_PROGRESS_REPLY === 'true',
     commentMode: parseCommentMode(env.TFV_COMMENT_MODE, 'TFV_COMMENT_MODE') ?? 'new',
     spinnerUrl: spinnerUrlFor(publicUrl),
     github,
     repos,
     channels: policy.channels,
     people: policy.people,
+    policies: policy.policies,
     auth: loadAuth(env, publicUrl, policy.users),
   };
 };

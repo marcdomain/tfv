@@ -272,7 +272,16 @@ export const createHttpServer = (deps: HttpDeps): Server => {
           });
           return send(res, 200, { total: r.total, items: r.items.map(show.audit) });
         }
-        if (url.pathname === '/api/facets') return send(res, 200, deps.store.facets());
+        if (url.pathname === '/api/facets') return send(res, 200, { ...deps.store.facets(), rules: deps.store.findingRules() });
+        if (url.pathname === '/api/policy/search') {
+          const r = deps.store.searchFindings({
+            q: str('q'), project: str('project'), rule: str('rule'),
+            severity: oneOf('severity', ['low', 'medium', 'high', 'critical'] as const),
+            mode: oneOf('mode', ['audit', 'enforce'] as const),
+            from: time('from'), to: time('to'), limit: num('limit'), offset: num('offset'),
+          });
+          return send(res, 200, { total: r.total, items: r.items.map(show.finding) });
+        }
         if (url.pathname === '/api/projects') {
           return send(res, 200, deps.store.projectSummaries().map(p => ({
             ...p, lastRun: show.run(p.lastRun), lastApply: p.lastApply ? show.run(p.lastApply) : null, lock: p.lock ? show.lock(p.lock) : null,

@@ -8,7 +8,7 @@ import { parseRepoConfig, emptyRepoConfig } from '../src/repoConfig.ts';
 import type { Project } from '../src/discovery.ts';
 import type { Permission, Repo } from '../src/vcs/types.ts';
 
-const project = (name: string): Project => ({ name, dir: name, workspace: 'default', engine: 'terraform', tool: 'terraform', autoplan: true, deps: [] });
+const project = (name: string): Project => ({ name, dir: name, workspace: 'default', engine: 'terraform', tool: 'terraform', autoplan: true, deps: [], watch: [] });
 
 // Fake org: who has which repo permission and team.
 const PERMS: Record<string, Permission> = { alice: 'admin', bob: 'write', carol: 'write', dave: 'read', erin: 'maintain', frank: 'write' };
@@ -161,4 +161,20 @@ describe('spinner availability', () => {
       assert.equal(spinnerUrlFor(u), null, u);
     }
   });
+});
+
+test('by default results are posted once and never edited (no "Running…" reply)', async () => {
+  const { loadConfig } = await import('../src/config.ts');
+  const { mkdtempSync, writeFileSync, rmSync } = await import('node:fs');
+  const { tmpdir } = await import('node:os');
+  const { join } = await import('node:path');
+  const dir = mkdtempSync(join(tmpdir(), 'tfv-cfg-'));
+  try {
+    writeFileSync(join(dir, 'repos.yaml'), 'repos:\n  - id: github.com/acme/*\n');
+    const env = { TFV_DATA_DIR: dir, TFV_REPOS_CONFIG: join(dir, 'repos.yaml'), TFV_GITHUB_APP_ID: '1', TFV_GITHUB_PRIVATE_KEY: 'k', TFV_GITHUB_WEBHOOK_SECRET: 'w' };
+    assert.equal(loadConfig(env).progressReply, false);
+    assert.equal(loadConfig({ ...env, TFV_PROGRESS_REPLY: 'true' }).progressReply, true);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 });

@@ -39,7 +39,7 @@ test('presenter attaches owners and links', () => {
   const run = show.run({
     id: 1, repo: 'github.com/acme/infra', pr: 42, project: 'prod', dir: 'envs/prod', workspace: 'default', kind: 'plan',
     status: 'success', headSha: 'abc123', user: 'erin', prAuthor: 'bob', startedAt: '', finishedAt: null, engine: '',
-    summary: null, output: '', planPath: null, hasChanges: true, destroys: 0, targets: [],
+    summary: null, output: '', planPath: null, hasChanges: true, destroys: 0, targets: [], policy: null, mocks: [], providers: [],
   });
   assert.deepEqual(run.links, {
     platform: 'GitHub', repo: 'https://github.com/acme/infra', pr: 'https://github.com/acme/infra/pull/42',

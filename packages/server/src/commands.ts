@@ -3,7 +3,7 @@
 //   tfv apply [-p project] [-d dir] [-w workspace]
 //   tfv unlock [-p project]
 //   tfv help
-// "atlantis plan" etc. also work when Atlantis compatibility is on.
+// Comments start with "tfv" (or "@tfv").
 
 export type Verb = 'plan' | 'apply' | 'unlock' | 'help';
 const VERBS: Verb[] = ['plan', 'apply', 'unlock', 'help'];
@@ -14,6 +14,7 @@ export interface Command {
   dir?: string;
   workspace?: string;
   destroy: boolean;
+  override: boolean;          // apply despite enforced policy findings / apply windows (if allowed)
   targets: string[];          // resource addresses for -target
   extraArgs: string[];
 }
@@ -50,7 +51,7 @@ export const parseCommand = (body: string, names: string[]): ParseResult => {
     return { ok: false, error: `Unknown command \`${tokens[1]}\`. Try \`${name} help\`.` };
   }
 
-  const command: Command = { verb, destroy: false, targets: [], extraArgs: [] };
+  const command: Command = { verb, destroy: false, override: false, targets: [], extraArgs: [] };
   const value = (i: number, flag: string): string => {
     const v = tokens[i + 1];
     if (v === undefined || v.startsWith('-')) throw new Error(`\`${flag}\` needs a value`);
@@ -74,6 +75,7 @@ export const parseCommand = (body: string, names: string[]): ParseResult => {
           break;
         }
         case '--destroy': command.destroy = true; break;
+        case '--override': command.override = true; break;
         default: throw new Error(`Unknown flag \`${t}\``);
       }
     }
@@ -82,6 +84,8 @@ export const parseCommand = (body: string, names: string[]): ParseResult => {
   }
 
   if (command.destroy && verb !== 'plan') return { ok: false, error: '`--destroy` only works with plan' };
+  if (command.override && verb !== 'apply') return { ok: false, error: '`--override` only works with apply' };
+  if (command.override && !command.project && !command.dir) return { ok: false, error: '`--override` needs a project: `tfv apply -p <project> --override`' };
   if (command.extraArgs.length && verb !== 'plan') return { ok: false, error: 'Extra arguments only work with plan' };
   if (command.targets.length && verb !== 'plan') {
     return { ok: false, error: 'Targets are set when planning: `tfv plan -p <project> -t <address>`, then `tfv apply -p <project>`' };

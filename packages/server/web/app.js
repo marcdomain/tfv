@@ -145,6 +145,7 @@
   };
   const LABELS = {
     q: 'Search', user: 'Person', project: 'Project', status: 'Result', kind: 'Type', action: 'Action', result: 'Decision', range: 'When', sort: 'Sort',
+    rule: 'Rule', severity: 'Severity', mode: 'Mode',
   };
   const STATUS = [['', 'Any result'], ['changes', 'Has changes'], ['destroys', 'Destroys or replaces'], ['nochanges', 'No changes'], ['applied', 'Applied'], ['failed', 'Failed'], ['running', 'Running']];
   const chips = (params) => {
@@ -345,8 +346,29 @@
 
     async audit(_arg, params) {
       const f = await api('/api/facets');
+      const tab = params.get('tab') === 'policy' ? 'policy' : 'decisions';
+      const tabs = `<div class="tabs" role="tablist">
+        <a role="tab" aria-selected="${tab === 'decisions'}" href="#audit">Decisions</a>
+        <a role="tab" aria-selected="${tab === 'policy'}" href="#audit?tab=policy">Policy findings</a></div>`;
+      if (tab === 'policy') {
+        return `
+          <div class="page-head"><h1>Audit</h1><span class="muted">Policy findings on every plan, in audit and enforce mode</span></div>
+          ${tabs}
+          <form class="filters" data-list="policy" autocomplete="off">
+            <input type="hidden" name="tab" value="policy">
+            <label class="f grow"><span>Search</span><input type="search" name="q" value="${esc(params.get('q') || '')}" placeholder="Rule, resource, message, project or person"></label>
+            ${select('project', 'Project', [['', 'All projects'], ...f.projects.map(x => [x, x])], params)}
+            ${select('rule', 'Rule', [['', 'Any rule'], ...f.rules.map(x => [x, x])], params)}
+            ${select('severity', 'Severity', [['', 'Any severity'], ['critical', 'Critical'], ['high', 'High'], ['medium', 'Medium'], ['low', 'Low']], params)}
+            ${select('mode', 'Mode', [['', 'Audit or enforce'], ['enforce', 'Enforced (blocking)'], ['audit', 'Audit only']], params)}
+            ${rangeControl(params)}
+          </form>
+          <div id="chips">${chips(params)}</div>
+          <div class="card" id="results"><div class="empty">Loading…</div></div>`;
+      }
       return `
-        <div class="page-head"><h1>Audit log</h1><span class="muted">Every permission decision, allowed or denied</span></div>
+        <div class="page-head"><h1>Audit</h1><span class="muted">Every permission decision, allowed or denied</span></div>
+        ${tabs}
         <form class="filters" data-list="audit" autocomplete="off">
           <label class="f grow"><span>Search</span><input type="search" name="q" value="${esc(params.get('q') || '')}" placeholder="Person, project, repo or reason"></label>
           ${select('user', 'Person', [['', 'Anyone'], ...f.users.map(u => [u, u])], params)}
@@ -393,10 +415,26 @@
     <td class="mono">${projLink(a.project)}</td><td>${prLink(a)}</td>
     <td class="wrap">${a.allowed ? '<span class="pill ok">allowed</span>' : `<span class="pill bad">denied</span> <span class="muted">${esc(a.reason.replace(/`/g, ''))}</span>`}</td>
   </tr>`;
+  const SEV_PILL = { critical: 'bad', high: 'bad', medium: 'warn', low: '' };
+  const findingRow = (x) => `<tr>
+    <td class="muted" title="${esc(when(x.at))}">${ago(x.at)}</td>
+    <td><span class="pill ${SEV_PILL[x.severity] ?? ''}">${esc(x.severity)}</span></td>
+    <td><b>${esc(x.rule)}</b></td>
+    <td class="mono">${projLink(x.project)}</td>
+    <td class="mono wrap">${esc(x.address)}</td>
+    <td class="wrap">${esc(String(x.message).split('\n')[0].slice(0, 240))}</td>
+    <td>${x.mode === 'enforce' ? '<span class="pill bad">enforced</span>' : '<span class="pill">audit</span>'}</td>
+    <td>${prLink(x)}</td>
+    <td>${who(x.user, x.links?.user, null, x.links?.userAvatar)}</td>
+  </tr>`;
   const LISTS = {
     runs: {
       url: '/api/runs/search', keys: ['q', 'user', 'project', 'status', 'kind', 'sort'], noun: ['run', 'runs'],
       head: ['Result', 'Project', 'Changes', 'Pull request', 'People', 'Engine', 'When'], row: runRow, empty: 'No runs match these filters.',
+    },
+    policy: {
+      url: '/api/policy/search', keys: ['q', 'project', 'rule', 'severity', 'mode'], noun: ['finding', 'findings'],
+      head: ['When', 'Severity', 'Rule', 'Project', 'Resource', 'Finding', 'Mode', 'Pull request', 'Planned by'], row: findingRow, empty: 'No policy findings match these filters.',
     },
     audit: {
       url: '/api/audit/search', keys: ['q', 'user', 'project', 'action', 'result'], noun: ['decision', 'decisions'],
@@ -404,6 +442,8 @@
     },
   };
   let listState = null;
+  // The Audit page shows decisions or policy findings, depending on its tab.
+  const listName = (view, params) => (view === 'audit' && params.get('tab') === 'policy' ? 'policy' : LISTS[view] ? view : null);
   const loadList = async (name, params, append = false) => {
     const L = LISTS[name];
     const box = $('#results');
@@ -436,7 +476,8 @@
     document.querySelectorAll('#nav a').forEach(a => a.classList.toggle('active', a.dataset.view === viewName));
     try {
       view.innerHTML = await (viewName === 'runs' && arg ? views.run(arg) : views[viewName](arg, params));
-      if (LISTS[viewName] && !arg) await loadList(viewName, params);
+      const list = listName(viewName, params);
+      if (list && !arg) await loadList(list, params);
       $('#refreshed').textContent = `Updated ${new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })}`;
     } catch (err) {
       if (err.message !== 'unauthorized') view.innerHTML = `<div class="card"><div class="empty error">Could not load this page: ${esc(err.message)}</div></div>`;
@@ -451,8 +492,9 @@
     if (name === 'runs' && arg) return;
     timer = setTimeout(async () => {
       const c = current();
-      if (LISTS[c.name] && !c.arg && $('#results')) {
-        await loadList(c.name, c.params).catch(() => {});
+      const list = listName(c.name, c.params);
+      if (list && !c.arg && $('#results')) {
+        await loadList(list, c.params).catch(() => {});
         schedule();
       } else route();
     }, 15000);
@@ -464,7 +506,8 @@
     const hash = `#${name}${[...params.keys()].length ? `?${params}` : ''}`;
     if (full) { location.hash = hash; return; }
     history.replaceState(null, '', hash);
-    if (LISTS[name]) loadList(name, params).catch(() => {});
+    const list = listName(name, params);
+    if (list) loadList(list, params).catch(() => {});
     else route();
   };
   let typing = null;
@@ -498,7 +541,9 @@
     const clear = e.target.closest('button[data-clear]');
     if (clear) {
       const { name, params } = current();
-      const keep = clear.dataset.clear === '*' ? new URLSearchParams(params.get('sort') ? { sort: params.get('sort') } : {}) : params;
+      const keep = clear.dataset.clear === '*'
+        ? new URLSearchParams(Object.fromEntries(['sort', 'tab'].filter(k => params.get(k)).map(k => [k, params.get(k)])))
+        : params;
       if (clear.dataset.clear !== '*') { keep.delete(clear.dataset.clear); if (clear.dataset.clear === 'range') { keep.delete('from'); keep.delete('to'); } }
       setParams(name, keep, true);
       return;
@@ -506,7 +551,7 @@
     if (e.target.closest('button[data-more]')) {
       const { name, params } = current();
       e.target.closest('button[data-more]').disabled = true;
-      await loadList(name, params, true).catch(() => {});
+      await loadList(listName(name, params), params, true).catch(() => {});
       return;
     }
     const unlock = e.target.closest('button[data-unlock]');

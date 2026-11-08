@@ -6,6 +6,7 @@ export interface RepoLinks {
   name: string;                                        // "GitHub", "GitLab", ...
   repo: string;
   pr(n: number): string;
+  comment(n: number, id: string): string;              // jumps to one comment on the PR
   commit(sha: string): string;
   tree(sha: string, dir: string): string;
   file(sha: string, path: string, start?: number, end?: number): string;
@@ -29,6 +30,7 @@ export const repoLinks = (repoKey: string, platform: Platform): RepoLinks => {
       return {
         platform, name: 'GitLab', repo: base,
         pr: n => `${base}/-/merge_requests/${n}`,
+        comment: (n, id) => `${base}/-/merge_requests/${n}#note_${id}`,
         commit: sha => `${base}/-/commit/${sha}`,
         tree: (sha, d) => `${base}/-/tree/${sha}/${dirOrRoot(d)}`,
         file: (sha, f, a, b) => `${base}/-/blob/${sha}/${enc(f)}${a ? `#L${a}${b && b !== a ? `-${b}` : ''}` : ''}`,
@@ -38,6 +40,7 @@ export const repoLinks = (repoKey: string, platform: Platform): RepoLinks => {
       return {
         platform, name: 'Bitbucket', repo: base,
         pr: n => `${base}/pull-requests/${n}`,
+        comment: (n, id) => `${base}/pull-requests/${n}#comment-${id}`,
         commit: sha => `${base}/commits/${sha}`,
         tree: (sha, d) => `${base}/src/${sha}/${dirOrRoot(d)}`,
         file: (sha, f, a, b) => `${base}/src/${sha}/${enc(f)}${a ? `#lines-${a}${b && b !== a ? `:${b}` : ''}` : ''}`,
@@ -49,6 +52,7 @@ export const repoLinks = (repoKey: string, platform: Platform): RepoLinks => {
       return {
         platform, name: 'Azure DevOps', repo: r,
         pr: n => `${r}/pullrequest/${n}`,
+        comment: (n, id) => `${r}/pullrequest/${n}?discussionId=${id}`,
         commit: sha => `${r}/commit/${sha}`,
         tree: (sha, d) => `${r}?path=/${d === '.' ? '' : encodeURIComponent(d)}&version=GC${sha}`,
         file: (sha, f, a, b) => `${r}?path=/${encodeURIComponent(f)}&version=GC${sha}${a ? `&line=${a}&lineEnd=${(b ?? a) + 1}&lineStartColumn=1&lineEndColumn=1` : ''}`,
@@ -59,6 +63,7 @@ export const repoLinks = (repoKey: string, platform: Platform): RepoLinks => {
       return {
         platform: 'github', name: 'GitHub', repo: base,
         pr: n => `${base}/pull/${n}`,
+        comment: (n, id) => `${base}/pull/${n}#issuecomment-${id}`,
         commit: sha => `${base}/commit/${sha}`,
         tree: (sha, d) => `${base}/tree/${sha}/${dirOrRoot(d)}`,
         file: (sha, f, a, b) => `${base}/blob/${sha}/${enc(f)}${a ? `#L${a}${b && b !== a ? `-L${b}` : ''}` : ''}`,

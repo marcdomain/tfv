@@ -1,4 +1,4 @@
-// Repo-side config: tfv.yaml, or atlantis.yaml for easy migration.
+// Repo-side config: tfv.yaml.
 // It can describe projects and add rules; policy.ts makes sure repo rules can
 // only tighten what the server allows.
 import { existsSync, readFileSync } from 'node:fs';
@@ -16,14 +16,14 @@ export interface ProjectConfig {
   version?: string;               // terraform / tofu version
   terragrunt_version?: string;
   autoplan?: boolean;
-  when_modified?: string[];
+  watch?: string[];               // extra files that should replan this project (globs; added to automatic detection)
   approvals?: ApprovalRule[];
   permissions?: Partial<Record<Action, Principal[]>>;
   apply_requirements?: Requirement[];
 }
 
 export interface RepoConfig {
-  source: 'tfv.yaml' | 'atlantis.yaml' | null;
+  source: 'tfv.yaml' | null;
   autodiscover: boolean;
   projects: ProjectConfig[];
   apply_requirements: Requirement[];
@@ -59,7 +59,7 @@ const parseTfv = (doc: Record<string, any>): RepoConfig => {
       name: p.name, dir: cleanDir(p.dir), workspace: p.workspace, engine,
       version: p.version != null ? String(p.version) : undefined,
       terragrunt_version: p.terragrunt_version != null ? String(p.terragrunt_version) : undefined,
-      autoplan: p.autoplan, when_modified: p.when_modified,
+      autoplan: p.autoplan, watch: Array.isArray(p.watch) ? p.watch.map(String) : undefined,
       approvals: p.approvals, permissions: p.permissions,
       apply_requirements: requirements(p.apply_requirements, `projects[${i}]`, warnings),
     };
@@ -82,39 +82,12 @@ const parseTfv = (doc: Record<string, any>): RepoConfig => {
   };
 };
 
-const parseAtlantis = (doc: Record<string, any>): RepoConfig => {
-  const warnings: string[] = [];
-  if (doc.workflows) warnings.push('atlantis.yaml custom workflows are not run; tfv uses its built-in plan/apply steps');
-  const projects: ProjectConfig[] = (doc.projects ?? []).map((p: Record<string, any>, i: number) => {
-    if (p.workflow) warnings.push(`project ${p.name ?? p.dir}: workflow "${p.workflow}" ignored`);
-    return {
-      name: p.name, dir: cleanDir(p.dir), workspace: p.workspace,
-      version: p.terraform_version != null ? String(p.terraform_version).replace(/^v/, '') : undefined,
-      autoplan: p.autoplan?.enabled, when_modified: p.autoplan?.when_modified,
-      apply_requirements: requirements(p.apply_requirements, `projects[${i}]`, warnings),
-    };
-  });
-  // Atlantis only autodiscovers when no projects are listed (mode "auto").
-  const mode = doc.autodiscover?.mode ?? 'auto';
-  return {
-    source: 'atlantis.yaml',
-    autodiscover: mode === 'enabled' || (mode === 'auto' && projects.length === 0),
-    projects,
-    apply_requirements: [],
-    rules: projects.filter(p => p.apply_requirements?.length)
-      .map(p => ({ match: p.name ?? p.dir, apply_requirements: p.apply_requirements })),
-    drift: [],
-    require_apply_project: false,
-    warnings,
-  };
-};
-
-export const REPO_CONFIG_FILES = ['tfv.yaml', 'tfv.yml', 'atlantis.yaml', 'atlantis.yml'];
+export const REPO_CONFIG_FILES = ['tfv.yaml', 'tfv.yml'];
 
 export const parseRepoConfig = (file: string, text: string): RepoConfig => {
   const doc = YAML.parse(text) ?? {};
   try {
-    return file.startsWith('tfv') ? parseTfv(doc) : parseAtlantis(doc);
+    return parseTfv(doc);
   } catch (err) {
     throw new Error(`${file}: ${(err as Error).message}`);
   }

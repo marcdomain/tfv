@@ -78,7 +78,7 @@ test('unrelated files plan nothing', () => {
   assert.deepEqual(affectedProjects(projects, ['README.md', 'docs/x.md']), []);
 });
 
-test('tfv.yaml adds names, workspaces and when_modified', () => {
+test('tfv.yaml adds names, workspaces and watch globs', () => {
   write('tfv.yaml', [
     'projects:',
     '  - name: prod-network',
@@ -86,7 +86,7 @@ test('tfv.yaml adds names, workspaces and when_modified', () => {
     '  - name: prod-network-dr',
     '    dir: envs/prod',
     '    workspace: dr',
-    '    when_modified: ["*.tf", "../../modules/**"]',
+    '    watch: ["../../modules/unused/**"]',
   ].join('\n'));
   try {
     const projects = discoverProjects(root, loadRepoConfig(root));

@@ -36,6 +36,8 @@ export type VcsEvent =
   | { kind: 'pr_opened' | 'pr_updated'; repo: Repo; pr: PullRequest }
   | { kind: 'pr_closed'; repo: Repo; pr: PullRequest; merged: boolean }
   | { kind: 'comment'; repo: Repo; prNumber: number; commentId: string; author: string; body: string }
+  // Someone else edited or deleted a comment written by tfv.
+  | { kind: 'bot_comment_changed'; repo: Repo; prNumber: number; commentId: string; by: string; change: 'edited' | 'deleted'; body: string }
   | { kind: 'apply_button'; repo: Repo; prNumber: number; project: string; user: string }
   | { kind: 'ignored'; reason: string };
 
@@ -87,8 +89,9 @@ export interface VcsAdapter {
   changedFiles(repo: Repo, number: number): Promise<string[]>;
   cloneAuth(repo: Repo): Promise<CloneAuth>;
 
-  // Creates or edits the comment that contains `marker`; returns its web URL.
-  upsertComment(repo: Repo, number: number, marker: string, body: string): Promise<string | null>;
+  // Edits the comment `knownId` (or else the one containing `marker`), or creates it.
+  // Returns its id and web URL.
+  upsertComment(repo: Repo, number: number, marker: string, body: string, knownId?: string | null): Promise<{ id: string; url: string } | null>;
   // Posts a comment; returns its id so it can be edited later.
   comment(repo: Repo, number: number, body: string): Promise<string | null>;
   editComment(repo: Repo, commentId: string, body: string): Promise<void>;

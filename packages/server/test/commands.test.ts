@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { parseCommand } from '../src/commands.ts';
 
-const names = ['tfv', 'atlantis'];
+const names = ['tfv'];
 const ok = (body: string) => {
   const r = parseCommand(body, names);
   assert.ok(r && r.ok, `expected ok for ${body}: ${JSON.stringify(r)}`);
@@ -21,7 +21,7 @@ test('bare name means help', () => {
 
 test('plan with flags', () => {
   const c = ok('tfv plan -p prod/network -w staging --destroy');
-  assert.deepEqual(c, { verb: 'plan', project: 'prod/network', workspace: 'staging', destroy: true, targets: [], extraArgs: [] });
+  assert.deepEqual(c, { verb: 'plan', project: 'prod/network', workspace: 'staging', destroy: true, override: false, targets: [], extraArgs: [] });
 });
 
 test('long flags, = syntax, ./dir normalized', () => {
@@ -34,8 +34,8 @@ test('extra args after --, with quotes', () => {
   assert.deepEqual(ok('tfv plan -- -var "env=prod east" -refresh=false').extraArgs, ['-var', 'env=prod east', '-refresh=false']);
 });
 
-test('atlantis compatibility and @mention', () => {
-  assert.equal(ok('atlantis apply -p x').verb, 'apply');
+test('@mention and case', () => {
+  assert.equal(parseCommand('terraform apply -p x', names), null, 'only tfv commands');
   assert.equal(ok('@tfv plan').verb, 'plan');
   assert.equal(ok('TFV PLAN').verb, 'plan');
 });

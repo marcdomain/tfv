@@ -81,9 +81,9 @@ HttpOnly cookies. The chart generates the signing key once and keeps it across u
 | `config.repoAllowlist` | `[]` | Repos tfv may act on, e.g. `github.com/acme/*` |
 | `config.requireApplyProject` | `false` | Refuse a bare `tfv apply`; one project at a time |
 | `config.ackReaction` | `eyes` | Reaction on a command tfv picked up: `eyes`, `rocket`, `+1`, `heart`, `hooray`, `laugh`, `confused`, `-1` or `none` |
-| `config.progressReply` | `true` | A spinning "Running…" reply under the command that turns into the result. Needs a public https URL; skipped otherwise |
+| `config.progressReply` | `false` | Off: results are posted once and never edited. On: a spinning "Running…" reply edited into the result (needs a public https URL) |
 | `config.commentMode` | `new` | `new`: a new comment for each plan and apply. `update`: one comment at the top, edited in place |
-| `config.parallelism` | `4` | Plans running at once |
+| `config.parallelism` | `4` | Plans and applies running at once, shared fairly between PRs |
 | `config.preinstall` | `[]` | e.g. `[terraform@1.9.8, tofu@1.8.5]` |
 | `repos` | `{}` | Full `repos.yaml`: rules, approvers, channels, people, drift schedules |
 | `extraEnvFrom` / `extraEnv` | `[]` | Cloud credentials, `TFV_SLACK_TOKEN`, `TFV_TEAMS_WEBHOOK`, … |
@@ -110,6 +110,9 @@ repos:
 extraEnvFrom:
   - secretRef: { name: tfv-chat-tokens }   # holds TFV_SLACK_TOKEN
 ```
+
+Policy checks and the two-person rule go in the same `repos` value; see the
+[server README](../../packages/server/README.md#policy-checks).
 
 ## How it runs
 
