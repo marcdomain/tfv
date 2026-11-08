@@ -94,9 +94,20 @@ jobs:
       - name: End-to-end (mock GitHub, real git and terraform)
         run: packages/server/e2e/run.sh tfv-server:ci
 
-      - uses: helm/kind-action@v1
-        with:
-          cluster_name: tfv-ci
+      # kind installed directly, version pinned and checksum verified: helm/kind-action@v1
+      # (v1.15.2) started failing its own checksum step, which broke this job.
+      - name: Create a kind cluster
+        env:
+          KIND_VERSION: v0.33.0
+        run: |
+          base="https://github.com/kubernetes-sigs/kind/releases/download/${KIND_VERSION}"
+          curl -fsSLo kind-linux-amd64 "$base/kind-linux-amd64"
+          curl -fsSLo kind-linux-amd64.sha256sum "$base/kind-linux-amd64.sha256sum"
+          sha256sum -c kind-linux-amd64.sha256sum
+          sudo install -m 0755 kind-linux-amd64 /usr/local/bin/kind
+          rm kind-linux-amd64 kind-linux-amd64.sha256sum
+          kind create cluster --name tfv-ci --wait 120s
+          kubectl cluster-info --context kind-tfv-ci
 
       - uses: actions/setup-node@v5
         with:
