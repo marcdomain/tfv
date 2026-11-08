@@ -11,6 +11,7 @@ type, so they look the same everywhere.
 | `tfv-mark.svg`, `tfv-mark-512.png` | The mark alone (app icons, small spaces) |
 | `tfv-avatar.svg` / `.png` | Round profile picture: GitHub App, social |
 | `favicon.svg`, `favicon-32.png`, `apple-touch-icon.png` | Browser tab and home screen |
+| `social-preview.png` | 1280×640 link preview: GitHub repo social preview, Open Graph image for the website |
 
 ```html
 <link rel="icon" href="/favicon.svg" type="image/svg+xml">
