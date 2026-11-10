@@ -10,7 +10,7 @@ let hits;
 const routes = {};
 
 beforeAll(async () => {
-  process.env.TFV_RETRY_DELAY_MS = '1';
+  process.env.TERIAC_RETRY_DELAY_MS = '1';
   server = http.createServer((req, res) => {
     hits[req.url] = (hits[req.url] || 0) + 1;
     const route = routes[req.url];
@@ -20,7 +20,7 @@ beforeAll(async () => {
   await new Promise(r => server.listen(0, '127.0.0.1', r));
   base = `http://127.0.0.1:${server.address().port}`;
 });
-afterAll(() => { delete process.env.TFV_RETRY_DELAY_MS; server.close(); });
+afterAll(() => { delete process.env.TERIAC_RETRY_DELAY_MS; server.close(); });
 beforeEach(() => { hits = {}; });
 
 test('a 504 (GitHub timing out) is retried until it works', async () => {

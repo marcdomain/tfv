@@ -1,5 +1,5 @@
 // RBAC and apply rules. The server's repos.yaml sets the rules; a repo's
-// tfv.yaml can add rules on top. Both must pass, so a repo can only tighten.
+// teriac.yaml can add rules on top. Both must pass, so a repo can only tighten.
 import type { Action, ApprovalRule, Principal, ProjectRule, RepoPolicy, Requirement } from './config.ts';
 import type { RepoConfig } from './repoConfig.ts';
 import type { Project } from './discovery.ts';

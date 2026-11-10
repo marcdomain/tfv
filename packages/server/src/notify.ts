@@ -142,7 +142,7 @@ const slackMention = async (ctx: NotifyContext, token: string | null, id: Identi
 export const slackMessage = async (r: DriftReport, mention: (id: Identity) => Promise<string>) => {
   const blocks: unknown[] = [
     { type: 'header', text: { type: 'plain_text', text: headline(r).slice(0, 150) } },
-    { type: 'context', elements: [{ type: 'mrkdwn', text: `Schedule *${r.schedule}* · commit \`${short(r.sha)}\`${r.cleanCount ? ` · ${r.cleanCount} other project${r.cleanCount === 1 ? '' : 's'} clean` : ''}${r.url ? ` · <${r.url}|open in tfv>` : ''}` }] },
+    { type: 'context', elements: [{ type: 'mrkdwn', text: `Schedule *${r.schedule}* · commit \`${short(r.sha)}\`${r.cleanCount ? ` · ${r.cleanCount} other project${r.cleanCount === 1 ? '' : 's'} clean` : ''}${r.url ? ` · <${r.url}|open in teriac>` : ''}` }] },
   ];
   for (const p of r.projects.slice(0, 20)) {
     const lines: string[] = [`*${p.project}* · ${p.engine}`];
@@ -192,7 +192,7 @@ export const teamsMessage = (r: DriftReport, people: Person[]) => {
   }
   const card = {
     $schema: 'http://adaptivecards.io/schemas/adaptive-card.json', type: 'AdaptiveCard', version: '1.4', body,
-    actions: r.url ? [{ type: 'Action.OpenUrl', title: 'Open in tfv', url: r.url }] : [],
+    actions: r.url ? [{ type: 'Action.OpenUrl', title: 'Open in teriac', url: r.url }] : [],
     msteams: { entities, width: 'Full' },
   };
   return { type: 'message', attachments: [{ contentType: 'application/vnd.microsoft.card.adaptive', contentUrl: null, content: card }] };
@@ -252,7 +252,7 @@ export const sendReport = async (name: string, channel: ChannelConfig, report: D
       return;
     case 'webhook':
       await post(f, secret(ctx.env, channel.webhook_url_env, `channel ${name}`), {
-        event: 'tfv.drift',
+        event: 'teriac.drift',
         report,
         people: report.projects.map(p => ({ project: p.project, people: peopleFor(p).map(id => ({ ...id, person: findPerson(ctx.people, id) ?? null })) })),
       });

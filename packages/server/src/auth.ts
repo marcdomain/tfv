@@ -103,8 +103,8 @@ export const parseCookies = (header: string | undefined): Record<string, string>
 export const cookie = (name: string, value: string, cfg: AuthConfig, maxAgeSeconds: number) =>
   `${name}=${encodeURIComponent(value)}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${maxAgeSeconds}${cfg.secureCookies ? '; Secure' : ''}`;
 
-export const SESSION_COOKIE = 'tfv_session';
-export const OIDC_COOKIE = 'tfv_oidc';
+export const SESSION_COOKIE = 'teriac_session';
+export const OIDC_COOKIE = 'teriac_oidc';
 
 export const newSession = (cfg: AuthConfig, s: Omit<Session, 'exp'>): { session: Session; setCookie: string } => {
   const session = { ...s, exp: now() + cfg.sessionHours * 3600 };
@@ -197,7 +197,7 @@ export class Oidc {
     const raw = claims[this.cfg.groupsClaim];
     const groups: string[] = Array.isArray(raw) ? raw.map(String) : typeof raw === 'string' ? [raw] : [];
     if (this.cfg.allowedGroups.length && !groups.some(g => this.cfg.allowedGroups.includes(g)) && !groups.some(g => this.cfg.adminGroups.includes(g))) {
-      throw new Error('your account is not in a group allowed to use tfv');
+      throw new Error('your account is not in a group allowed to use teriac');
     }
     const role: Role = groups.some(g => this.cfg.adminGroups.includes(g)) ? 'admin' : 'viewer';
     const name = String(claims.name ?? claims.email ?? claims.preferred_username ?? claims.sub);

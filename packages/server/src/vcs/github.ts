@@ -77,7 +77,7 @@ export class GitHubAdapter implements VcsAdapter {
     const known = this.installationIds.get(repo.fullName.toLowerCase());
     if (known) return known;
     const res = await this.fetchImpl(`${this.cfg.apiUrl}/repos/${repo.fullName}/installation`, {
-      headers: { Authorization: `Bearer ${appJwt(this.cfg.appId, this.cfg.privateKey)}`, Accept: 'application/vnd.github+json', 'User-Agent': 'tfv-server' },
+      headers: { Authorization: `Bearer ${appJwt(this.cfg.appId, this.cfg.privateKey)}`, Accept: 'application/vnd.github+json', 'User-Agent': 'teriac-server' },
     });
     if (!res.ok) throw new Error(`no GitHub App installation for ${repo.fullName} (HTTP ${res.status}); is the App installed on it?`);
     const id = (await res.json() as { id: number }).id;
@@ -90,7 +90,7 @@ export class GitHubAdapter implements VcsAdapter {
   async downloadToken(): Promise<string | null> {
     if (this.cfg.host !== 'github.com') return null;
     const res = await this.fetchImpl(`${this.cfg.apiUrl}/app/installations?per_page=1`, {
-      headers: { Authorization: `Bearer ${appJwt(this.cfg.appId, this.cfg.privateKey)}`, Accept: 'application/vnd.github+json', 'User-Agent': 'tfv-server' },
+      headers: { Authorization: `Bearer ${appJwt(this.cfg.appId, this.cfg.privateKey)}`, Accept: 'application/vnd.github+json', 'User-Agent': 'teriac-server' },
     });
     if (!res.ok) return null;
     const [first] = await res.json() as { id: number; account?: { login?: string } }[];
@@ -104,7 +104,7 @@ export class GitHubAdapter implements VcsAdapter {
     if (cached && cached.expires - 5 * 60_000 > Date.now()) return cached.token;
     const res = await this.fetchImpl(`${this.cfg.apiUrl}/app/installations/${id}/access_tokens`, {
       method: 'POST',
-      headers: { Authorization: `Bearer ${appJwt(this.cfg.appId, this.cfg.privateKey)}`, Accept: 'application/vnd.github+json', 'User-Agent': 'tfv-server' },
+      headers: { Authorization: `Bearer ${appJwt(this.cfg.appId, this.cfg.privateKey)}`, Accept: 'application/vnd.github+json', 'User-Agent': 'teriac-server' },
     });
     if (!res.ok) throw new Error(`GitHub App token request failed: HTTP ${res.status}`);
     const data = await res.json() as { token: string; expires_at: string };
@@ -122,7 +122,7 @@ export class GitHubAdapter implements VcsAdapter {
         Authorization: `Bearer ${token}`,
         Accept: 'application/vnd.github+json',
         'X-GitHub-Api-Version': '2022-11-28',
-        'User-Agent': 'tfv-server',
+        'User-Agent': 'teriac-server',
         ...(body ? { 'Content-Type': 'application/json' } : {}),
       },
       body: body ? JSON.stringify(body) : undefined,
@@ -170,7 +170,7 @@ export class GitHubAdapter implements VcsAdapter {
   }
 
   async listRepos(): Promise<Repo[]> {
-    const headers = { Authorization: `Bearer ${appJwt(this.cfg.appId, this.cfg.privateKey)}`, Accept: 'application/vnd.github+json', 'User-Agent': 'tfv-server' };
+    const headers = { Authorization: `Bearer ${appJwt(this.cfg.appId, this.cfg.privateKey)}`, Accept: 'application/vnd.github+json', 'User-Agent': 'teriac-server' };
     const res = await this.fetchImpl(`${this.cfg.apiUrl}/app/installations?per_page=100`, { headers });
     if (!res.ok) throw new Error(`GitHub: listing installations failed (HTTP ${res.status})`);
     const installations = await res.json() as { id: number }[];
@@ -274,8 +274,9 @@ export class GitHubAdapter implements VcsAdapter {
       if (status === 200) return { id: String(data.id), url: data.html_url };
     }
     const comments = await this.paginate<any>(repo, `/repos/${repo.fullName}/issues/${number}/comments`);
-    const mine = comments.find(c => c.performed_via_github_app?.id === Number(this.cfg.appId) && c.body?.includes(marker))
-      ?? comments.find(c => c.user?.type === 'Bot' && c.body?.includes(marker));
+    const has = (c: any) => c.body?.includes(marker);
+    const mine = comments.find(c => c.performed_via_github_app?.id === Number(this.cfg.appId) && has(c))
+      ?? comments.find(c => c.user?.type === 'Bot' && has(c));
     const { data } = mine
       ? await this.api(repo, 'PATCH', `/repos/${repo.fullName}/issues/comments/${mine.id}`, { body })
       : await this.api(repo, 'POST', `/repos/${repo.fullName}/issues/${number}/comments`, { body });

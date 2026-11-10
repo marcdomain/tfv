@@ -66,7 +66,7 @@ export class DriftScheduler {
 
   get schedules() { return this.entries; }
 
-  // Loads schedules from repos.yaml and every allowed repo's tfv.yaml.
+  // Loads schedules from repos.yaml and every allowed repo's teriac.yaml.
   async refresh(): Promise<void> {
     const { config } = this.deps;
     const entries: ScheduleEntry[] = [];
@@ -103,7 +103,7 @@ export class DriftScheduler {
           const rc = await loadRepoConfigFrom(f => adapter.fileAt(repo, f, repo.defaultBranch ?? 'main'));
           rc.drift.forEach((d, i) => add(d, 'repo', i));
         } catch (err) {
-          log.warn('drift: bad tfv.yaml; its schedules are skipped', { repo: id, err });
+          log.warn('drift: bad teriac.yaml; its schedules are skipped', { repo: id, err });
         }
       }
     }
@@ -207,7 +207,7 @@ export class DriftScheduler {
       const planDir = join(config.dataDir, 'drift-plans', e.repo.host, e.repo.owner, e.repo.name, slug(e.branch));
       const env = toolEnv(this.deps.env ?? process.env, {
         TF_PLUGIN_CACHE_DIR: join(config.dataDir, 'plugin-cache'),
-        TFV_PROJECT: project.name, TFV_WORKSPACE: project.workspace, TFV_REPO: e.repo.fullName, TFV_BRANCH: e.branch,
+        TERIAC_PROJECT: project.name, TERIAC_WORKSPACE: project.workspace, TERIAC_REPO: e.repo.fullName, TERIAC_BRANCH: e.branch,
       });
       const base = { root, project, tools, env, timeoutMs: config.runTimeoutMs };
 

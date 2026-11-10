@@ -4,12 +4,12 @@ const { join } = require('path');
 
 const VERSIONS = ['1.10.0', '1.9.8', '1.9.2', '1.8.5', '1.5.7'];
 
-// Loads tfv/core with TFV_HOME pointed at a temp dir and the remote
-// version list stubbed, so nothing touches ~/.tfv or the network.
+// Loads teriac's core with TERIAC_HOME pointed at a temp dir and the remote
+// version list stubbed, so nothing touches ~/.teriac or the network.
 const loadCore = (home) => {
   let core;
-  const previous = process.env.TFV_HOME;
-  process.env.TFV_HOME = home;
+  const previous = process.env.TERIAC_HOME;
+  process.env.TERIAC_HOME = home;
   jest.isolateModules(() => {
     jest.doMock('../lib/modules/remote', () => ({
       fetchAllVersions: jest.fn(async () => VERSIONS),
@@ -17,7 +17,7 @@ const loadCore = (home) => {
     }));
     core = require('../lib/core');
   });
-  if (previous === undefined) delete process.env.TFV_HOME; else process.env.TFV_HOME = previous;
+  if (previous === undefined) delete process.env.TERIAC_HOME; else process.env.TERIAC_HOME = previous;
   return core;
 };
 
@@ -26,8 +26,8 @@ let project;
 let core;
 
 beforeEach(() => {
-  home = fs.mkdtempSync(join(os.tmpdir(), 'tfv-core-home-'));
-  project = fs.mkdtempSync(join(os.tmpdir(), 'tfv-core-proj-'));
+  home = fs.mkdtempSync(join(os.tmpdir(), 'teriac-core-home-'));
+  project = fs.mkdtempSync(join(os.tmpdir(), 'teriac-core-proj-'));
   core = loadCore(home);
 });
 
@@ -100,7 +100,7 @@ describe('ensureVersion', () => {
     await expect(core.ensureVersion(project, 'terraform')).rejects.toMatchObject({ code: core.CODES.NO_VERSION });
   });
 
-  test('returns an installed binary from TFV_HOME without downloading', async () => {
+  test('returns an installed binary from TERIAC_HOME without downloading', async () => {
     const store = join(home, 'store', 'terraform');
     fs.mkdirSync(store, { recursive: true });
     const binName = process.platform === 'win32' ? '1.9.8.exe' : '1.9.8';

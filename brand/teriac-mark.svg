@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64">
+  <title>teriac</title>
+  <style>.m{color:#4f46e5}@media (prefers-color-scheme: dark){.m{color:#818cf8}}</style>
+  <g class="m"><path d="M32 6 L54 18.5 L32 31 L10 18.5 Z" fill="none" stroke="currentColor" stroke-width="4" stroke-linecap="round" stroke-linejoin="round" stroke-dasharray="5 5"/><path d="M10 26 L32 38.5 L32 59 L10 46.5 Z" fill="currentColor" stroke="currentColor" stroke-width="3" stroke-linejoin="round"/><path d="M54 26 L32 38.5 L32 59 L54 46.5 Z" fill="currentColor" fill-opacity="0.7"/></g>
+</svg>

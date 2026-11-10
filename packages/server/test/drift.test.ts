@@ -47,7 +47,7 @@ const sh = (args: string[], name = 'Alice Okafor', email = 'alice@acme.dev') =>
 
 const repo: Repo = { platform: 'github', host: 'github.com', owner: 'acme', name: 'infra', fullName: 'acme/infra', cloneUrl: '', defaultBranch: 'main', installationId: 1 };
 
-const REPO_TFV_YAML = `
+const REPO_TERIAC_YAML = `
 drift:
   - name: from-repo
     projects: ["envs/*"]
@@ -60,7 +60,7 @@ drift:
 `;
 
 before(() => {
-  tmp = mkdtempSync(join(tmpdir(), 'tfv-drift-'));
+  tmp = mkdtempSync(join(tmpdir(), 'teriac-drift-'));
   origin = join(tmp, 'origin');
   mkdirSync(join(origin, 'envs/prod'), { recursive: true });
   execFileSync('git', ['init', '-q', '-b', 'main'], { cwd: origin });
@@ -93,8 +93,8 @@ repos:
         notify: [alerts]
 `);
   const config: ServerConfig = {
-    port: 0, dataDir: join(tmp, 'data'), publicUrl: 'https://tfv.example.com', parallelism: 2, runTimeoutMs: 60_000,
-    commandNames: ['tfv'], defaultVersion: 'latest', requireApplyProject: false, ackReaction: 'eyes', progressReply: true, commentMode: 'update', spinnerUrl: null, auth: { sessionSecret: 'x'.repeat(32), sessionHours: 1, secureCookies: false, users: [] }, ...policy,
+    port: 0, dataDir: join(tmp, 'data'), publicUrl: 'https://teriac.example.com', parallelism: 2, runTimeoutMs: 60_000,
+    commandNames: ['teriac'], defaultVersion: 'latest', requireApplyProject: false, ackReaction: 'eyes', progressReply: true, commentMode: 'update', spinnerUrl: null, auth: { sessionSecret: 'x'.repeat(32), sessionHours: 1, secureCookies: false, users: [] }, ...policy,
   };
   store = new Store(':memory:');
   sent = [];
@@ -106,7 +106,7 @@ repos:
   const adapter: any = {
     platform: 'github',
     listRepos: async () => [repo, { ...repo, fullName: 'stranger/repo', owner: 'stranger', name: 'repo' }],
-    fileAt: async (_r: Repo, f: string) => (f === 'tfv.yaml' ? REPO_TFV_YAML : null),
+    fileAt: async (_r: Repo, f: string) => (f === 'teriac.yaml' ? REPO_TERIAC_YAML : null),
     cloneAuth: async () => ({ url: origin }),
   };
   drift = new DriftScheduler({

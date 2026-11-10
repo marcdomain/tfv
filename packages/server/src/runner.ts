@@ -4,8 +4,8 @@ import { spawn } from 'node:child_process';
 import { mkdirSync, existsSync, rmSync, writeFileSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import type { Project } from './discovery.ts';
-import type { Provider } from './tfv.ts';
-import { tfv } from './tfv.ts';
+import type { Provider } from './teriac.ts';
+import { teriac } from './teriac.ts';
 import { redact } from './log.ts';
 import { summarizePlan, type PlanSummary } from './render.ts';
 
@@ -32,7 +32,7 @@ const parents = (root: string, dir: string): string[] => {
 // Version pinned for `provider`: the project dir (all sources), then parent
 // dirs up to the repo root (version files and terragrunt constraints only).
 export const findPinnedUp = (root: string, dir: string, provider: Provider): string | null => {
-  const core = tfv();
+  const core = teriac();
   const [own, ...ups] = parents(root, dir);
   const pinned = core.findPinnedVersion(own, provider);
   if (pinned) return pinned.version;
@@ -44,9 +44,9 @@ export const findPinnedUp = (root: string, dir: string, provider: Provider): str
   return null;
 };
 
-export const tfvResolver = (defaultVersion: string): ToolResolver => ({
+export const teriacResolver = (defaultVersion: string): ToolResolver => ({
   async resolve(root, project) {
-    const core = tfv();
+    const core = teriac();
     const get = async (provider: Provider, configured?: string): Promise<Tool> => {
       const wanted = configured ?? findPinnedUp(root, project.dir, provider) ?? defaultVersion;
       const exact = await core.resolveExactVersion(provider, wanted === 'latest' ? '>= 0' : wanted);
@@ -86,7 +86,7 @@ export const exec = (
   child.stdout.on('data', c => add(c, true));
   child.stderr.on('data', c => add(c, false));
   const timer = setTimeout(() => {
-    output += `\n[tfv] timed out after ${Math.round(opts.timeoutMs / 1000)}s; stopping\n`;
+    output += `\n[teriac] timed out after ${Math.round(opts.timeoutMs / 1000)}s; stopping\n`;
     child.kill('SIGTERM');
     setTimeout(() => child.kill('SIGKILL'), 10_000).unref();
   }, opts.timeoutMs);
@@ -95,10 +95,10 @@ export const exec = (
 });
 
 // Env for terraform/terragrunt: the server's env minus its own settings and
-// secrets (anything TFV_*), plus automation flags and PR context.
+// secrets (anything TERIAC_*), plus automation flags and PR context.
 export const toolEnv = (base: NodeJS.ProcessEnv, extra: Record<string, string>): NodeJS.ProcessEnv => {
   const env: NodeJS.ProcessEnv = {};
-  for (const [k, v] of Object.entries(base)) if (!k.startsWith('TFV_')) env[k] = v;
+  for (const [k, v] of Object.entries(base)) if (!k.startsWith('TERIAC_')) env[k] = v;
   return {
     ...env,
     TF_IN_AUTOMATION: '1',
@@ -197,7 +197,7 @@ export const plan = async (ctx: RunContext, opts: { destroy?: boolean; targets?:
     planJsonPath = `${ctx.planPath}.json`;
     writeFileSync(planJsonPath, json);
   } catch {
-    log.push('[tfv] could not read the plan as JSON; showing raw output only');
+    log.push('[teriac] could not read the plan as JSON; showing raw output only');
   }
   const hasChanges = summary ? !summary.noChanges : p.code === 2;
   return { ok: true, output: log.join('\n'), summary, hasChanges, plan: parsed, planJsonPath, usage: usage() };

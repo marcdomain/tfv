@@ -36,7 +36,7 @@ export type VcsEvent =
   | { kind: 'pr_opened' | 'pr_updated'; repo: Repo; pr: PullRequest }
   | { kind: 'pr_closed'; repo: Repo; pr: PullRequest; merged: boolean }
   | { kind: 'comment'; repo: Repo; prNumber: number; commentId: string; author: string; body: string }
-  // Someone else edited or deleted a comment written by tfv.
+  // Someone else edited or deleted a comment written by teriac.
   | { kind: 'bot_comment_changed'; repo: Repo; prNumber: number; commentId: string; by: string; change: 'edited' | 'deleted'; body: string }
   | { kind: 'apply_button'; repo: Repo; prNumber: number; project: string; user: string }
   | { kind: 'ignored'; reason: string };
@@ -73,7 +73,7 @@ export interface CloneAuth {
 // Reactions every supported platform can show (GitHub's set).
 export const REACTIONS = ['eyes', 'rocket', '+1', '-1', 'heart', 'hooray', 'laugh', 'confused'] as const;
 export type Reaction = typeof REACTIONS[number];
-// The reaction tfv adds to a command it picked up, or none.
+// The reaction teriac adds to a command it picked up, or none.
 export type Ack = Reaction | 'none';
 
 export interface VcsAdapter {

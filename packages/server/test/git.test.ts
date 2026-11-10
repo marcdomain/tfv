@@ -7,7 +7,7 @@ import { join } from 'node:path';
 import { checkout, checkoutBranch } from '../src/git.ts';
 
 test('recovers a checkout that was interrupted before the remote was added', async () => {
-  const tmp = mkdtempSync(join(tmpdir(), 'tfv-git-'));
+  const tmp = mkdtempSync(join(tmpdir(), 'teriac-git-'));
   try {
     const origin = join(tmp, 'origin');
     mkdirSync(origin);
@@ -33,7 +33,7 @@ test('recovers a checkout that was interrupted before the remote was added', asy
 });
 
 test('a PR checkout keeps local state files between runs, but removes other leftovers', async () => {
-  const tmp = mkdtempSync(join(tmpdir(), 'tfv-git-'));
+  const tmp = mkdtempSync(join(tmpdir(), 'teriac-git-'));
   try {
     const origin = join(tmp, 'origin');
     mkdirSync(join(origin, 'infra'), { recursive: true });

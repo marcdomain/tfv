@@ -73,7 +73,7 @@ test('avatars: only known hosts, cached, misses remembered', async () => {
   const { mkdtempSync, rmSync } = await import('node:fs');
   const { tmpdir } = await import('node:os');
   const { join } = await import('node:path');
-  const dir = mkdtempSync(join(tmpdir(), 'tfv-av-'));
+  const dir = mkdtempSync(join(tmpdir(), 'teriac-av-'));
   let calls = 0;
   const png = Buffer.from([0x89, 0x50, 0x4e, 0x47, 1, 2, 3]);
   const a = new Avatars(dir, { 'github.com': 'github' }, async (url) => {

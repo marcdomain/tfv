@@ -6,7 +6,7 @@ const { findVersionFile } = require('../lib/utils/versionFiles');
 let dir;
 const write = (name, content) => fs.writeFileSync(join(dir, name), content);
 
-beforeEach(() => { dir = fs.mkdtempSync(join(os.tmpdir(), 'tfv-vf-')); });
+beforeEach(() => { dir = fs.mkdtempSync(join(os.tmpdir(), 'teriac-vf-')); });
 afterEach(() => { fs.rmSync(dir, { recursive: true, force: true }); });
 
 describe('terraform', () => {

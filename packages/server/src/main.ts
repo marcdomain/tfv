@@ -1,4 +1,4 @@
-// tfv-server entry point.
+// teriac-server entry point.
 import { join } from 'node:path';
 import { mkdirSync } from 'node:fs';
 import { loadConfig } from './config.ts';
@@ -11,12 +11,12 @@ try {
 } catch (err) {
   const e = err as NodeJS.ErrnoException;
   const message = e.code === 'ENOENT' ? `cannot read ${e.path}: file not found` : e.message;
-  log.error(`tfv-server cannot start: ${message}`);
+  log.error(`teriac-server cannot start: ${message}`);
   process.exit(1);
 }
 
-// tfv's core keeps tool binaries under TFV_HOME; it must be set before the core loads.
-process.env.TFV_HOME = join(config.dataDir, 'tfv');
+// teriac's core keeps tool binaries under TERIAC_HOME; it must be set before the core loads.
+process.env.TERIAC_HOME = join(config.dataDir, 'teriac');
 mkdirSync(join(config.dataDir, 'plugin-cache'), { recursive: true });
 addSecretsFromEnv(process.env);
 addSecret(config.github?.privateKey);
@@ -25,17 +25,17 @@ const { Store } = await import('./store.ts');
 const { App } = await import('./app.ts');
 const { GitHubAdapter } = await import('./vcs/github.ts');
 const { createHttpServer } = await import('./http.ts');
-const { tfvResolver } = await import('./runner.ts');
-const { tfv, setDownloadToken } = await import('./tfv.ts');
+const { teriacResolver } = await import('./runner.ts');
+const { teriac, setDownloadToken } = await import('./teriac.ts');
 const { DriftScheduler } = await import('./drift.ts');
 const { Oidc } = await import('./auth.ts');
 const { Avatars } = await import('./avatars.ts');
 
-const store = new Store(join(config.dataDir, 'tfv.db'));
-const app = new App({ config, store, resolver: tfvResolver(config.defaultVersion) });
+const store = new Store(join(config.dataDir, 'teriac.db'));
+const app = new App({ config, store, resolver: teriacResolver(config.defaultVersion) });
 const adapters = { github: config.github ? new GitHubAdapter(config.github) : undefined };
 const drift = new DriftScheduler({
-  config, store, resolver: tfvResolver(config.defaultVersion),
+  config, store, resolver: teriacResolver(config.defaultVersion),
   adapters: Object.values(adapters).filter(a => a !== undefined),
   limited: fn => app.limited(fn),
 });
@@ -68,22 +68,22 @@ const server = createHttpServer({
 });
 addSecret(config.auth.apiToken);
 addSecret(config.auth.oidc?.clientSecret);
-if (!process.env.TFV_SESSION_SECRET && !process.env.TFV_SESSION_SECRET_FILE) {
-  log.warn('TFV_SESSION_SECRET is not set; dashboard sessions end when the server restarts');
+if (!process.env.TERIAC_SESSION_SECRET && !process.env.TERIAC_SESSION_SECRET_FILE) {
+  log.warn('TERIAC_SESSION_SECRET is not set; dashboard sessions end when the server restarts');
 }
 
 server.listen(config.port, () => {
   ready = true;
-  if (process.env.TFV_DRIFT !== 'false') drift.start();
-  log.info('tfv-server listening', { port: config.port, dataDir: config.dataDir, repos: config.repos.map(r => r.id) });
+  if (process.env.TERIAC_DRIFT !== 'false') drift.start();
+  log.info('teriac-server listening', { port: config.port, dataDir: config.dataDir, repos: config.repos.map(r => r.id) });
 });
 
-// Optional warm-up, e.g. TFV_PREINSTALL="terraform@1.9.8,tofu@1.8.5,terragrunt@0.83.2"
-const preinstall = (process.env.TFV_PREINSTALL ?? '').split(',').map(s => s.trim()).filter(Boolean);
+// Optional warm-up, e.g. TERIAC_PREINSTALL="terraform@1.9.8,tofu@1.8.5,terragrunt@0.83.2"
+const preinstall = (process.env.TERIAC_PREINSTALL ?? '').split(',').map(s => s.trim()).filter(Boolean);
 for (const item of preinstall) {
   const [name, version] = item.split('@');
   const provider = name === 'tofu' ? 'opentofu' : name === 'tg' ? 'terragrunt' : name;
-  tfv().installVersion(provider as 'terraform', version)
+  teriac().installVersion(provider as 'terraform', version)
     .then(r => log.info('preinstalled', { provider: r.provider, version: r.version }))
     .catch(err => log.warn('preinstall failed', { item, err }));
 }

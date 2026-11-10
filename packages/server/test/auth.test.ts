@@ -49,7 +49,7 @@ const unlocks: string[] = [];
 let srv: Server;
 let base: string;
 let store: Store;
-let groups: string[] = ['tfv-admins'];
+let groups: string[] = ['teriac-admins'];
 let tamper = false;
 const codes = new Map<string, { challenge: string; nonce: string }>();
 
@@ -76,9 +76,9 @@ before(async () => {
       const c = codes.get(f.get('code')!);
       const auth = Buffer.from(String(req.headers.authorization).slice(6), 'base64').toString();
       const pkceOk = c && createHash('sha256').update(f.get('code_verifier')!).digest('base64url') === c.challenge;
-      if (!pkceOk || auth !== 'tfv-client:tfv-secret') { res.writeHead(400); return res.end('{"error":"invalid_grant"}'); }
+      if (!pkceOk || auth !== 'teriac-client:teriac-secret') { res.writeHead(400); return res.end('{"error":"invalid_grant"}'); }
       const t = Math.floor(Date.now() / 1000);
-      return json({ id_token: jwt({ iss: idpUrl, aud: 'tfv-client', sub: '00u1', name: 'Alice Okafor', email: 'alice@acme.dev', groups, nonce: c.nonce, iat: t, exp: t + 300 }) });
+      return json({ id_token: jwt({ iss: idpUrl, aud: 'teriac-client', sub: '00u1', name: 'Alice Okafor', email: 'alice@acme.dev', groups, nonce: c.nonce, iat: t, exp: t + 300 }) });
     }
     res.writeHead(404); res.end();
   });
@@ -94,15 +94,15 @@ before(async () => {
       { username: 'viewer', password_hash: hashPassword('viewer-password-1') },
     ],
     oidc: {
-      issuer: '', clientId: 'tfv-client', clientSecret: 'tfv-secret', name: 'Okta', scopes: ['openid', 'groups'],
-      groupsClaim: 'groups', adminGroups: ['tfv-admins'], allowedGroups: ['tfv-viewers'],
+      issuer: '', clientId: 'teriac-client', clientSecret: 'teriac-secret', name: 'Okta', scopes: ['openid', 'groups'],
+      groupsClaim: 'groups', adminGroups: ['teriac-admins'], allowedGroups: ['teriac-viewers'],
     },
   };
   auth.oidc!.issuer = idpUrl;
   srv = createHttpServer({
     app: { dashboardUnlock: async (_a: unknown, lock: { project: string }, who: { name: string }) => { unlocks.push(`${lock.project} by ${who.name}`); return true; } } as any,
     store, adapters: {}, auth, ready: () => true,
-    oidc: new Oidc(auth.oidc!, 'http://tfv.test'), loginLimiter: new RateLimiter(5, 60_000),
+    oidc: new Oidc(auth.oidc!, 'http://teriac.test'), loginLimiter: new RateLimiter(5, 60_000),
   });
   await new Promise<void>(r => srv.listen(0, '127.0.0.1', () => r()));
   base = `http://127.0.0.1:${(srv.address() as AddressInfo).port}`;
@@ -110,7 +110,7 @@ before(async () => {
 
 after(() => { srv.close(); idp.close(); store.close(); });
 
-const login = (username: string, password: string, headers: Record<string, string> = { 'X-Requested-With': 'tfv' }) =>
+const login = (username: string, password: string, headers: Record<string, string> = { 'X-Requested-With': 'teriac' }) =>
   fetch(`${base}/auth/login`, { method: 'POST', headers: { 'Content-Type': 'application/json', ...headers }, body: JSON.stringify({ username, password }) });
 const cookieOf = (res: Response) => res.headers.getSetCookie().map(c => c.split(';')[0]).join('; ');
 
@@ -132,7 +132,7 @@ describe('dashboard HTTP auth', () => {
     const res = await login('admin', 'admin-password-1');
     assert.equal(res.status, 200);
     const raw = res.headers.getSetCookie()[0];
-    assert.match(raw, /^tfv_session=.+; Path=\/; HttpOnly; SameSite=Lax; Max-Age=3600$/);
+    assert.match(raw, /^teriac_session=.+; Path=\/; HttpOnly; SameSite=Lax; Max-Age=3600$/);
     const me = await (await fetch(`${base}/api/me`, { headers: { Cookie: cookieOf(res) } })).json();
     assert.deepEqual(me, { name: 'Ada Admin', role: 'admin', via: 'password', platforms: [], version: VERSION });
   });
@@ -140,7 +140,7 @@ describe('dashboard HTTP auth', () => {
   test('viewers read; only admins act; cookie writes need the CSRF header', async () => {
     const viewer = cookieOf(await login('viewer', 'viewer-password-1'));
     const admin = cookieOf(await login('admin', 'admin-password-1'));
-    const unlock = (cookie: string, extra: Record<string, string> = { 'X-Requested-With': 'tfv' }) => fetch(`${base}/api/locks/unlock`, {
+    const unlock = (cookie: string, extra: Record<string, string> = { 'X-Requested-With': 'teriac' }) => fetch(`${base}/api/locks/unlock`, {
       method: 'POST', headers: { Cookie: cookie, 'Content-Type': 'application/json', ...extra },
       body: JSON.stringify({ repo: 'github.com/acme/infra', project: 'envs/prod', workspace: 'default' }),
     });
@@ -151,6 +151,7 @@ describe('dashboard HTTP auth', () => {
     assert.equal(res.status, 200);
     assert.equal((await res.json()).notified, true);
     assert.deepEqual(unlocks, ['envs/prod by Ada Admin'], 'the PR is told');
+    assert.equal((await unlock(admin, { 'X-Requested-With': 'XMLHttpRequest' })).status, 403, 'only the teriac header counts');
     assert.equal(store.auditLog(1)[0].user, 'Ada Admin');
   });
 
@@ -165,7 +166,7 @@ describe('dashboard HTTP auth', () => {
     const to = new URL(start.headers.get('location')!);
     assert.equal(to.origin + to.pathname, `${idpUrl}/authorize`);
     assert.equal(to.searchParams.get('code_challenge_method'), 'S256');
-    assert.equal(to.searchParams.get('redirect_uri'), 'http://tfv.test/auth/oidc/callback');
+    assert.equal(to.searchParams.get('redirect_uri'), 'http://teriac.test/auth/oidc/callback');
     const code = `code-${Math.random()}`;
     codes.set(code, { challenge: to.searchParams.get('code_challenge')!, nonce: to.searchParams.get('nonce')! });
     return { state: to.searchParams.get('state')!, code, cookie: cookieOf(start) };
@@ -173,31 +174,31 @@ describe('dashboard HTTP auth', () => {
   const callback = (q: string, cookie: string) => fetch(`${base}/auth/oidc/callback?${q}`, { redirect: 'manual', headers: { Cookie: cookie } });
 
   test('Okta sign-in: PKCE + nonce + signature; admin group becomes admin', async () => {
-    groups = ['tfv-admins'];
+    groups = ['teriac-admins'];
     const { state, code, cookie } = await sso();
     const res = await callback(`code=${code}&state=${state}`, cookie);
     assert.equal(res.headers.get('location'), '/#overview');
-    const session = res.headers.getSetCookie().find(c => c.startsWith('tfv_session='))!.split(';')[0];
+    const session = res.headers.getSetCookie().find(c => c.startsWith('teriac_session='))!.split(';')[0];
     const me = await (await fetch(`${base}/api/me`, { headers: { Cookie: session } })).json();
     assert.deepEqual(me, { name: 'Alice Okafor', role: 'admin', via: 'oidc', platforms: [], version: VERSION });
   });
 
   test('Okta sign-in: allowed group becomes viewer; others are refused', async () => {
-    groups = ['tfv-viewers'];
+    groups = ['teriac-viewers'];
     let s = await sso();
     let res = await callback(`code=${s.code}&state=${s.state}`, s.cookie);
-    const session = res.headers.getSetCookie().find(c => c.startsWith('tfv_session='))!.split(';')[0];
+    const session = res.headers.getSetCookie().find(c => c.startsWith('teriac_session='))!.split(';')[0];
     assert.equal((await (await fetch(`${base}/api/me`, { headers: { Cookie: session } })).json()).role, 'viewer');
 
     groups = ['marketing'];
     s = await sso();
     res = await callback(`code=${s.code}&state=${s.state}`, s.cookie);
     assert.match(decodeURIComponent(res.headers.get('location')!), /not in a group allowed/);
-    assert.ok(!res.headers.getSetCookie().some(c => c.startsWith('tfv_session=') && !c.includes('Max-Age=0')));
+    assert.ok(!res.headers.getSetCookie().some(c => c.startsWith('teriac_session=') && !c.includes('Max-Age=0')));
   });
 
   test('Okta sign-in: wrong state, missing cookie and bad signatures fail', async () => {
-    groups = ['tfv-admins'];
+    groups = ['teriac-admins'];
     let s = await sso();
     assert.match(decodeURIComponent((await callback(`code=${s.code}&state=other`, s.cookie)).headers.get('location')!), /state did not match/);
     s = await sso();

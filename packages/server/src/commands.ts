@@ -1,13 +1,13 @@
 // Parses PR comment commands:
-//   tfv plan [-p project] [-d dir] [-w workspace] [-t address]... [--destroy] [--refresh-only] [--replace address]... [-- extra args]
-//   tfv apply [-p project] [-d dir] [-w workspace]
-//   tfv unlock [-p project]
-//   tfv help
+//   teriac plan [-p project] [-d dir] [-w workspace] [-t address]... [--destroy] [--refresh-only] [--replace address]... [-- extra args]
+//   teriac apply [-p project] [-d dir] [-w workspace]
+//   teriac unlock [-p project]
+//   teriac help
 // Terraform commands on one project (-p is required):
-//   tfv state list [address]... | state show <address> | state rm <address>... | state mv <from> <to>
-//   tfv output [name] | show | validate | providers | fmt
-//   tfv import <address> <id> | taint <address> | untaint <address> | force-unlock <lock-id>
-// Comments start with "tfv" (or "@tfv").
+//   teriac state list [address]... | state show <address> | state rm <address>... | state mv <from> <to>
+//   teriac output [name] | show | validate | providers | fmt
+//   teriac import <address> <id> | taint <address> | untaint <address> | force-unlock <lock-id>
+// Comments start with "teriac" (or "@teriac").
 
 import type { CommandAction } from './config.ts';
 
@@ -15,7 +15,7 @@ export type Verb = 'plan' | 'apply' | 'unlock' | 'help'
   | 'state' | 'output' | 'show' | 'validate' | 'providers' | 'fmt' | 'import' | 'taint' | 'untaint' | 'force-unlock';
 const VERBS: Verb[] = ['plan', 'apply', 'unlock', 'help', 'state', 'output', 'show', 'validate', 'providers', 'fmt', 'import', 'taint', 'untaint', 'force-unlock'];
 
-// Terraform commands tfv runs for a single project. Nothing else is passed through:
+// Terraform commands teriac runs for a single project. Nothing else is passed through:
 // commands like `console` or flags like `-chdir` could reach beyond the project.
 export type ToolCommand = 'state list' | 'state show' | 'state rm' | 'state mv' | 'output' | 'show' | 'validate'
   | 'providers' | 'fmt' | 'import' | 'taint' | 'untaint' | 'force-unlock';
@@ -54,7 +54,7 @@ export const TARGET_RE = /^[A-Za-z_][\w.\-\[\]"*/:]*$/;
 export type ParseResult =
   | { ok: true; command: Command }
   | { ok: false; error: string }
-  | null; // not addressed to tfv
+  | null; // not addressed to teriac
 
 // Splits on whitespace, honoring single and double quotes.
 const tokenize = (line: string): string[] => {
@@ -143,13 +143,13 @@ export const parseCommand = (body: string, names: string[]): ParseResult => {
   if (command.refreshOnly && command.destroy) return { ok: false, error: '`--refresh-only` and `--destroy` can\'t be combined' };
   if (command.destroy && verb !== 'plan') return { ok: false, error: '`--destroy` only works with plan' };
   if (command.override && verb !== 'apply') return { ok: false, error: '`--override` only works with apply' };
-  if (command.override && !command.project && !command.dir) return { ok: false, error: '`--override` needs a project: `tfv apply -p <project> --override`' };
+  if (command.override && !command.project && !command.dir) return { ok: false, error: '`--override` needs a project: `teriac apply -p <project> --override`' };
   if (command.extraArgs.length && verb !== 'plan') return { ok: false, error: 'Extra arguments only work with plan' };
   if (command.targets.length && verb !== 'plan') {
-    return { ok: false, error: 'Targets are set when planning: `tfv plan -p <project> -t <address>`, then `tfv apply -p <project>`' };
+    return { ok: false, error: 'Targets are set when planning: `teriac plan -p <project> -t <address>`, then `teriac apply -p <project>`' };
   }
   if (command.targets.length && !command.project && !command.dir) {
-    return { ok: false, error: 'Targets need a project: `tfv plan -p <project> -t <address>`' };
+    return { ok: false, error: 'Targets need a project: `teriac plan -p <project> -t <address>`' };
   }
   return { ok: true, command };
 };
@@ -204,8 +204,8 @@ export const toolArgs = (c: Command): string[] => {
 
 // Lists only what this server allows: a bare `apply` is left out when
 // projects must be applied one at a time.
-export const helpText = (name = 'tfv', oneProjectPerApply = false): string => [
-  '### tfv commands',
+export const helpText = (name = 'teriac', oneProjectPerApply = false): string => [
+  '### teriac commands',
   '| Command | What it does |',
   '|---|---|',
   `| \`${name} plan\` | Plan every project changed in this PR |`,

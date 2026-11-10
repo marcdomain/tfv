@@ -44,10 +44,10 @@ test('paths, stricter modes and validation', () => {
 });
 
 test('external scanners: a non-zero exit is a finding', async () => {
-  const dir = mkdtempSync(join(tmpdir(), 'tfv-pol-'));
+  const dir = mkdtempSync(join(tmpdir(), 'teriac-pol-'));
   try {
     const scanner = join(dir, 'scan');
-    writeFileSync(scanner, '#!/bin/sh\necho "checking $1"\ngrep -q legacy_queue "$1" && { echo "FAILED CKV_TFV_1: legacy queue still referenced"; exit 1; }\nexit 0\n');
+    writeFileSync(scanner, '#!/bin/sh\necho "checking $1"\ngrep -q legacy_queue "$1" && { echo "FAILED CKV_TERIAC_1: legacy queue still referenced"; exit 1; }\nexit 0\n');
     chmodSync(scanner, 0o755);
     const json = join(dir, 'plan.json');
     writeFileSync(json, JSON.stringify(plan));
@@ -55,7 +55,7 @@ test('external scanners: a non-zero exit is a finding', async () => {
     assert.equal(f.length, 1);
     assert.equal(f[0].rule, 'my-scanner');
     assert.equal(f[0].severity, 'critical');
-    assert.match(f[0].message, /FAILED CKV_TFV_1/);
+    assert.match(f[0].message, /FAILED CKV_TERIAC_1/);
     writeFileSync(json, '{}');
     assert.equal((await runCommands([{ name: 'my-scanner', run: [scanner, '{plan_json}'] }], json, dir, { PATH: process.env.PATH }, prod)).length, 0);
   } finally {

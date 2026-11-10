@@ -163,13 +163,13 @@ export interface CommentLinks {
   tree(sha: string, dir: string): string;
   user(login: string): string | null;
   avatar?(login: string): string | null;
-  run?(id: number): string;    // the run's page in the tfv dashboard
+  run?(id: number): string;    // the run's page in the teriac dashboard
 }
 
 export interface CommentInput {
   marker: string;
   headSha: string;
-  command: string;            // "tfv"
+  command: string;            // "teriac"
   projects: ProjectView[];
   dashboardUrl?: string;
   limit: number;
@@ -246,7 +246,7 @@ export const renderComment = (input: CommentInput): string => {
   const head: string[] = [input.marker];
   const icon = failed ? '🔴' : dangerous.length ? '🟠' : '🟢';
   const shaText = links ? `[\`${short}\`](${links.commit(headSha)})` : `\`${short}\``;
-  head.push(`### ${icon} tfv · ${projects.length} project${projects.length === 1 ? '' : 's'} · ${shaText}`);
+  head.push(`### ${icon} teriac · ${projects.length} project${projects.length === 1 ? '' : 's'} · ${shaText}`);
 
   // One line of counts, so the state is clear before any detail.
   const ready = projects.filter(v => applyState(v) === 'ready');
@@ -321,9 +321,9 @@ export const renderComment = (input: CommentInput): string => {
     lines.push('', `<details${v.plan?.status === 'failed' ? ' open' : ''}><summary><b>${v.name}</b> — ${title}</summary>`, '<blockquote>', '');
     if (v.plan?.status === 'failed' && v.plan.mocks?.length) {
       const n = v.plan.mocks.length;
-      lines.push(`> [!IMPORTANT]\n> **Waiting for ${v.plan.mocks.map(m => `\`${m}\``).join(', ')}**, which ${n === 1 ? "isn't" : "aren't"} applied yet and ${n === 1 ? 'has' : 'have'} no outputs, and this unit has no \`mock_outputs\` to plan with. Apply ${n === 1 ? 'it' : 'them'} first; tfv then plans this unit again with the real outputs.`, '');
+      lines.push(`> [!IMPORTANT]\n> **Waiting for ${v.plan.mocks.map(m => `\`${m}\``).join(', ')}**, which ${n === 1 ? "isn't" : "aren't"} applied yet and ${n === 1 ? 'has' : 'have'} no outputs, and this unit has no \`mock_outputs\` to plan with. Apply ${n === 1 ? 'it' : 'them'} first; teriac then plans this unit again with the real outputs.`, '');
     } else if (v.plan?.mocks?.length) {
-      lines.push(`> [!WARNING]\n> **Planned with mock outputs** from ${v.plan.mocks.map(m => `\`${m}\``).join(', ')}, which ${v.plan.mocks.length === 1 ? "isn't" : "aren't"} applied yet. This plan can't be applied: apply ${v.plan.mocks.length === 1 ? 'it' : 'them'} first, and tfv re-plans this project with the real outputs.`, '');
+      lines.push(`> [!WARNING]\n> **Planned with mock outputs** from ${v.plan.mocks.map(m => `\`${m}\``).join(', ')}, which ${v.plan.mocks.length === 1 ? "isn't" : "aren't"} applied yet. This plan can't be applied: apply ${v.plan.mocks.length === 1 ? 'it' : 'them'} first, and teriac re-plans this project with the real outputs.`, '');
     }
     const pol = policyOf(v.plan);
     if (pol && pol.mode !== 'off') {
@@ -344,7 +344,7 @@ export const renderComment = (input: CommentInput): string => {
     } else if (applyState(v) === 'blocked') {
       lines.push(`**To apply${by}:** first ${v.blockers!.join('; ')}. Then comment:`, ...cmdBlock(`${command} apply -p ${v.name}`), '');
     }
-    if (v.plan && links?.run) lines.push(`[Open in the tfv dashboard](${links.run(v.plan.id)})`, '');
+    if (v.plan && links?.run) lines.push(`[Open in the teriac dashboard](${links.run(v.plan.id)})`, '');
     if (v.plan?.targets?.length) {
       lines.push(`> [!NOTE]\n> **Targeted plan:** only ${v.plan.targets.map(t => `\`${t}\``).join(', ')}. Other changes in this project are not included. Plan without \`-t\` for the full picture.`, '');
     }
@@ -424,7 +424,7 @@ export const parseApplyOutputs = (output: string): string | null => {
   const i = output.lastIndexOf('\nOutputs:\n');
   if (i < 0) return null;
   const block = output.slice(i + '\nOutputs:\n'.length).split('\n')
-    .filter(l => !/^\$ /.test(l) && !/^\s*\d{2}:\d{2}:\d{2}\.\d+ /.test(l)) // stop words from tfv / terragrunt log lines
+    .filter(l => !/^\$ /.test(l) && !/^\s*\d{2}:\d{2}:\d{2}\.\d+ /.test(l)) // stop words from teriac / terragrunt log lines
     .join('\n').trim();
   return block || null;
 };
@@ -452,7 +452,7 @@ export const renderApplyReport = (input: {
   const took = (r: Run) => (r.finishedAt && r.startedAt ? Math.max(0, Math.round((Date.parse(r.finishedAt) - Date.parse(r.startedAt)) / 1000)) : null);
 
   const head: string[] = [input.marker];
-  head.push(`### ${icon} tfv apply · ${applies.length} project${applies.length === 1 ? '' : 's'} · ${shaText}`);
+  head.push(`### ${icon} teriac apply · ${applies.length} project${applies.length === 1 ? '' : 's'} · ${shaText}`);
   head.push(`<sub>${failed.length ? `❌ ${failed.length} failed · ` : ''}applied by ${people.map(u => personMd(u, links)).join(', ')}</sub>`);
   const provs = (v: ApplyView) => (v.apply.providers?.length ? v.apply.providers : v.plan?.providers) ?? [];
   const showProviders = applies.some(v => provs(v).length);
@@ -469,7 +469,7 @@ export const renderApplyReport = (input: {
     const s = parse(v.plan);
     const ok = v.apply.status === 'success';
     const lines: string[] = ['', `<details${ok ? '' : ' open'}><summary><b>${v.name}</b> — ${ok ? 'applied' : 'apply failed'}</summary>`, '<blockquote>', ''];
-    if (v.plan && links?.run) lines.push(`[Open in the tfv dashboard](${links.run(v.apply.id)})`, '');
+    if (v.plan && links?.run) lines.push(`[Open in the teriac dashboard](${links.run(v.apply.id)})`, '');
     if (ok && s && s.changes.length) {
       const byAction = new Map<ChangeAction, string[]>();
       for (const c of s.changes) byAction.set(c.action, [...(byAction.get(c.action) ?? []), c.address]);

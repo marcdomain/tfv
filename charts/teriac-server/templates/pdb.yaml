@@ -1,0 +1,14 @@
+{{- if .Values.podDisruptionBudget.enabled }}
+# Stops voluntary evictions (node drains) from killing a running apply.
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ include "teriac.fullname" . }}
+  labels:
+    {{- include "teriac.labels" . | nindent 4 }}
+spec:
+  maxUnavailable: 0
+  selector:
+    matchLabels:
+      {{- include "teriac.selectorLabels" . | nindent 6 }}
+{{- end }}

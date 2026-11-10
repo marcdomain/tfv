@@ -1,7 +1,7 @@
-# tfv server
+# teriac server
 
 Pull request automation for **Terraform, OpenTofu and Terragrunt**, self-hosted with Docker or
-the [Helm chart](../../charts/tfv-server/README.md).
+the [Helm chart](../../charts/teriac-server/README.md).
 
 On every push it does three things:
 1. Finds the affected projects with no config needed.
@@ -15,12 +15,12 @@ any webhook, and tag who last changed each resource.
 ## Quick start
 
 ```sh
-docker run -p 8080:8080 -v tfv-data:/data \
-  -e TFV_GITHUB_APP_ID=123456 \
-  -e TFV_GITHUB_PRIVATE_KEY_FILE=/run/secrets/app.pem \
-  -e TFV_GITHUB_WEBHOOK_SECRET_FILE=/run/secrets/webhook \
-  -e TFV_REPO_ALLOWLIST='github.com/acme/*' \
-  ghcr.io/marcdomain/tfv-server
+docker run -p 8080:8080 -v teriac-data:/data \
+  -e TERIAC_GITHUB_APP_ID=123456 \
+  -e TERIAC_GITHUB_PRIVATE_KEY_FILE=/run/secrets/app.pem \
+  -e TERIAC_GITHUB_WEBHOOK_SECRET_FILE=/run/secrets/webhook \
+  -e TERIAC_REPO_ALLOWLIST='github.com/acme/*' \
+  ghcr.io/marcdomain/teriac-server
 ```
 
 Set up the GitHub App like this:
@@ -28,22 +28,22 @@ Set up the GitHub App like this:
 - **Events:** pull request, issue comment, check run
 - **Permissions:** Checks (read & write), Contents (read), Issues (read & write), Pull requests
   (read & write), Members (read)
-- **Logo:** upload [`brand/tfv-avatar.png`](../../brand/tfv-avatar.png) under *Display information*.
-  Without a logo, GitHub shows the App owner's picture on tfv's comments.
+- **Logo:** upload [`brand/teriac-avatar.png`](../../brand/teriac-avatar.png) under *Display information*.
+  Without a logo, GitHub shows the App owner's picture on teriac's comments.
 
 ## PR commands
 
 | Comment | Does |
 |---|---|
-| `tfv plan` | Plan every project this PR changes |
-| `tfv plan -p <project>` | Plan one project. `-d <dir>` and `-w <workspace>` also work |
-| `tfv plan -p <project> -t <address>` | Plan only some resources; repeat `-t` for more |
-| `tfv plan --destroy` | Plan a destroy |
-| `tfv plan -p <project> --replace <address>` | Plan replacing a resource |
-| `tfv plan -p <project> --refresh-only` | Plan updating the state to match what's deployed |
-| `tfv apply` | Apply every ready project (can be turned off, see below) |
-| `tfv apply -p <project>` | Apply one project. The Apply button does the same |
-| `tfv unlock` | Release this PR's locks and drop its plans |
+| `teriac plan` | Plan every project this PR changes |
+| `teriac plan -p <project>` | Plan one project. `-d <dir>` and `-w <workspace>` also work |
+| `teriac plan -p <project> -t <address>` | Plan only some resources; repeat `-t` for more |
+| `teriac plan --destroy` | Plan a destroy |
+| `teriac plan -p <project> --replace <address>` | Plan replacing a resource |
+| `teriac plan -p <project> --refresh-only` | Plan updating the state to match what's deployed |
+| `teriac apply` | Apply every ready project (can be turned off, see below) |
+| `teriac apply -p <project>` | Apply one project. The Apply button does the same |
+| `teriac unlock` | Release this PR's locks and drop its plans |
 
 Apply always uses the saved plan, so what runs is exactly what was reviewed.
 
@@ -51,10 +51,10 @@ Apply always uses the saved plan, so what runs is exactly what was reviewed.
 
 | Comment | Needs |
 |---|---|
-| `tfv validate`, `providers`, `fmt`, `state list [address]` | `plan` |
-| `tfv state show <address>`, `show`, `output [name]` | `state_read` |
-| `tfv import <address> <id>`, `taint <address>`, `untaint <address>` | `state_write` and approvals |
-| `tfv state rm <address>...`, `state mv <from> <to>`, `force-unlock <lock-id>` | `state_remove` and approvals |
+| `teriac validate`, `providers`, `fmt`, `state list [address]` | `plan` |
+| `teriac state show <address>`, `show`, `output [name]` | `state_read` |
+| `teriac import <address> <id>`, `taint <address>`, `untaint <address>` | `state_write` and approvals |
+| `teriac state rm <address>...`, `state mv <from> <to>`, `force-unlock <lock-id>` | `state_remove` and approvals |
 
 Commands that edit the state directly take the project's lock, are audited, and plan the
 project again Only these commands run, and arguments are checked, so nothing else (such as `console` or
@@ -65,23 +65,23 @@ project again Only these commands run, and arguments are checked, so nothing els
 
 | Env var | Default | |
 |---|---|---|
-| `TFV_REQUIRE_APPLY_PROJECT` | `false` | `true` turns off a bare `tfv apply`; people must apply one project at a time with `-p` |
-| `TFV_REPO_ALLOWLIST` | | Allowed repos, e.g. `github.com/acme/*` (or list them in `repos.yaml`) |
-| `TFV_REPOS_CONFIG` | `/data/repos.yaml` | Rules, approvers, channels, drift schedules |
-| `TFV_ACK_REACTION` | `eyes` | Reaction on a command tfv picked up: `eyes`, `rocket`, `+1`, `heart`, `hooray`, `laugh`, `confused`, `-1` or `none`. Per repo: `ack_reaction` |
-| `TFV_PROGRESS_REPLY` | `false` | Off: each result is posted once, as a new comment, and never edited (👀 shows it was picked up). On: a spinning "Running…" reply that is edited into the result. Needs a public https `TFV_PUBLIC_URL`; skipped otherwise. Per repo: `progress_reply` |
-| `TFV_COMMENT_MODE` | `new` | `new`: each plan and apply gets its own comment under the command. `update`: one comment at the top, edited in place. Per repo: `comment_mode` |
-| `TFV_PARALLELISM` | `4` | Plans and applies running at once, across all PRs |
-| `TFV_PR_PARALLELISM` | parallelism − 1 | One PR's share, so other PRs always get a slot. Freed slots go to the PR with the fewest runs going |
-| `TFV_DEFAULT_VERSION` | `latest` | Tool version when a project pins none |
-| `TFV_PREINSTALL` | | Warm the cache, e.g. `terraform@1.9.8,tofu@1.8.5` |
-| `GITHUB_TOKEN` | | Optional: tfv uses its GitHub App automatically. Set it on servers without a github.com App (GitLab, Bitbucket, GitHub Enterprise) to download OpenTofu and Terragrunt as a signed-in user. Needs no permissions |
-| `TFV_GITHUB_MIRROR` / `TFV_HASHICORP_MIRROR` | | Download OpenTofu/Terragrunt and Terraform from your own mirror (Artifactory, Nexus) instead of GitHub and HashiCorp |
-| `TFV_DRIFT` | `true` | Run drift schedules |
-| `TFV_SESSION_SECRET` | random | Signs dashboard sessions (32+ characters). Set it, or sessions end on restart |
-| `TFV_API_TOKEN` | | Admin token for automation and `/api` |
+| `TERIAC_REQUIRE_APPLY_PROJECT` | `false` | `true` turns off a bare `teriac apply`; people must apply one project at a time with `-p` |
+| `TERIAC_REPO_ALLOWLIST` | | Allowed repos, e.g. `github.com/acme/*` (or list them in `repos.yaml`) |
+| `TERIAC_REPOS_CONFIG` | `/data/repos.yaml` | Rules, approvers, channels, drift schedules |
+| `TERIAC_ACK_REACTION` | `eyes` | Reaction on a command teriac picked up: `eyes`, `rocket`, `+1`, `heart`, `hooray`, `laugh`, `confused`, `-1` or `none`. Per repo: `ack_reaction` |
+| `TERIAC_PROGRESS_REPLY` | `false` | Off: each result is posted once, as a new comment, and never edited (👀 shows it was picked up). On: a spinning "Running…" reply that is edited into the result. Needs a public https `TERIAC_PUBLIC_URL`; skipped otherwise. Per repo: `progress_reply` |
+| `TERIAC_COMMENT_MODE` | `new` | `new`: each plan and apply gets its own comment under the command. `update`: one comment at the top, edited in place. Per repo: `comment_mode` |
+| `TERIAC_PARALLELISM` | `4` | Plans and applies running at once, across all PRs |
+| `TERIAC_PR_PARALLELISM` | parallelism − 1 | One PR's share, so other PRs always get a slot. Freed slots go to the PR with the fewest runs going |
+| `TERIAC_DEFAULT_VERSION` | `latest` | Tool version when a project pins none |
+| `TERIAC_PREINSTALL` | | Warm the cache, e.g. `terraform@1.9.8,tofu@1.8.5` |
+| `GITHUB_TOKEN` | | Optional: teriac uses its GitHub App automatically. Set it on servers without a github.com App (GitLab, Bitbucket, GitHub Enterprise) to download OpenTofu and Terragrunt as a signed-in user. Needs no permissions |
+| `TERIAC_GITHUB_MIRROR` / `TERIAC_HASHICORP_MIRROR` | | Download OpenTofu/Terragrunt and Terraform from your own mirror (Artifactory, Nexus) instead of GitHub and HashiCorp |
+| `TERIAC_DRIFT` | `true` | Run drift schedules |
+| `TERIAC_SESSION_SECRET` | random | Signs dashboard sessions (32+ characters). Set it, or sessions end on restart |
+| `TERIAC_API_TOKEN` | | Admin token for automation and `/api` |
 
-`TFV_*` values are never passed to Terraform. Each secret can also be read from a file:
+`TERIAC_*` values are never passed to Terraform. Each secret can also be read from a file:
 `<NAME>_FILE`.
 
 ## Rules: `repos.yaml`
@@ -135,12 +135,12 @@ permissions:
 Only approvals of the current commit count, and the author's own approval never counts. Each
 project needs only its own approvals.
 
-A repo's `tfv.yaml` can name projects, pin versions, and add stricter rules, but never looser
+A repo's `teriac.yaml` can name projects, pin versions, and add stricter rules, but never looser
 ones. It's read from the base branch, so a PR can't change its own rules.
 
 ## What gets planned
 
-tfv finds Terraform, OpenTofu and Terragrunt projects on its own and plans the ones a PR
+teriac finds Terraform, OpenTofu and Terragrunt projects on its own and plans the ones a PR
 affects. That includes changes to:
 - the project's own files;
 - modules it uses, and the modules those use;
@@ -156,15 +156,15 @@ packages, add a watch. Globs work, a folder means everything inside it, and watc
 automatic detection; they never replace it.
 
 ```hcl
-# tfv:watch /lambda/orders/**/*.py scripts/build.sh      ← in any .tf, .tofu or .hcl file
+# teriac:watch /lambda/orders/**/*.py scripts/build.sh      ← in any .tf, .tofu or .hcl file
 
 locals {                                                ← Terragrunt, with its functions
-  tfv_watch = ["${get_repo_root()}/schemas/*.json"]
+  teriac_watch = ["${get_repo_root()}/schemas/*.json"]
 }
 ```
 
 ```yaml
-# tfv.yaml
+# teriac.yaml
 projects:
   - dir: stacks/orders
     watch: ["/lambda/orders/**"]
@@ -174,11 +174,11 @@ Paths are relative to the project folder; a leading `/` means the repo root.
 
 ## Terragrunt dependencies
 
-tfv never applies a dependency for you, and never applies a plan built on wrong outputs:
+teriac never applies a dependency for you, and never applies a plan built on wrong outputs:
 - **Mock outputs.** A unit planned with a dependency's `mock_outputs` (because the dependency
   isn't applied yet) is flagged in the PR and can't be applied, not even with `--override`.
-  tfv tells you to apply the dependency first: `tfv apply -p live/prod/vpc`.
-- **Re-plans.** When you apply a dependency, tfv re-plans the units that depend on it with the
+  teriac tells you to apply the dependency first: `teriac apply -p live/prod/vpc`.
+- **Re-plans.** When you apply a dependency, teriac re-plans the units that depend on it with the
   real outputs. That's a plan only, for you to review and apply.
 - **Outdated plans.** A plan made before one of its dependencies was applied is refused with
   "re-plan first".
@@ -188,7 +188,7 @@ tfv never applies a dependency for you, and never applies a plan built on wrong 
 ## Policy checks
 
 Rules run on every plan. In `audit` mode they report; in `enforce` mode they also block apply.
-Only people in `override` can apply anyway, with `tfv apply -p <project> --override`. That is
+Only people in `override` can apply anyway, with `teriac apply -p <project> --override`. That is
 audited.
 
 ```yaml
@@ -234,14 +234,14 @@ can't apply it; someone else with apply rights must.
 
 ```yaml
 channels:                                # in repos.yaml; secrets stay in env vars
-  infra-alerts: { type: slack, channel: "#infra-drift", token_env: TFV_SLACK_TOKEN }
-  ops-teams:    { type: teams, webhook_url_env: TFV_TEAMS_WEBHOOK }
+  infra-alerts: { type: slack, channel: "#infra-drift", token_env: TERIAC_SLACK_TOKEN }
+  ops-teams:    { type: teams, webhook_url_env: TERIAC_TEAMS_WEBHOOK }
 people:                                  # optional: git/GitHub → chat identity
   - { name: Bob Martins, github: bob-m, slack: U04BOBM, teams: bob@acme.onmicrosoft.com }
 
 repos:
   - id: github.com/acme/infra
-    drift:                               # or under `drift:` in the repo's tfv.yaml
+    drift:                               # or under `drift:` in the repo's teriac.yaml
       - name: prod-nightly
         projects: ["envs/prod", "live/prod/**"]
         branch: main
@@ -263,10 +263,10 @@ Failed checks always notify.
 
 ## Tamper-proof output
 
-GitHub lets anyone with write access edit any comment, including tfv's. tfv never reads its
+GitHub lets anyone with write access edit any comment, including teriac's. teriac never reads its
 comments back: what gets applied comes from the plan saved on the server, and check runs (which
-users can't edit) and the dashboard are the trusted record. If someone edits or deletes a tfv
-comment, tfv posts a warning naming who did it, with a link to the comment and a "View the
+users can't edit) and the dashboard are the trusted record. If someone edits or deletes a teriac
+comment, teriac posts a warning naming who did it, with a link to the comment and a "View the
 original" section, and logs it in the audit log.
 
 ## Dashboard
@@ -283,16 +283,16 @@ checks.
 
 | Sign-in | Settings |
 |---|---|
-| Okta or any OIDC provider | `TFV_OIDC_ISSUER`, `TFV_OIDC_CLIENT_ID`, `TFV_OIDC_CLIENT_SECRET`, `TFV_OIDC_ADMIN_GROUPS`, `TFV_OIDC_ALLOWED_GROUPS`. Redirect URI: `<public url>/auth/oidc/callback` |
-| Username and password | `dashboard.users` in `repos.yaml`, or `TFV_DASHBOARD_USERS_FILE`. Hash passwords with `node packages/server/src/hash-password.ts` |
-| API token | `TFV_API_TOKEN` (admin) |
+| Okta or any OIDC provider | `TERIAC_OIDC_ISSUER`, `TERIAC_OIDC_CLIENT_ID`, `TERIAC_OIDC_CLIENT_SECRET`, `TERIAC_OIDC_ADMIN_GROUPS`, `TERIAC_OIDC_ALLOWED_GROUPS`. Redirect URI: `<public url>/auth/oidc/callback` |
+| Username and password | `dashboard.users` in `repos.yaml`, or `TERIAC_DASHBOARD_USERS_FILE`. Hash passwords with `node packages/server/src/hash-password.ts` |
+| API token | `TERIAC_API_TOKEN` (admin) |
 
 Sessions are signed, HttpOnly cookies. Login attempts are rate limited, and the page loads nothing
 from third parties.
 
 ## API
 
-These need a dashboard session or `Authorization: Bearer $TFV_API_TOKEN`:
+These need a dashboard session or `Authorization: Bearer $TERIAC_API_TOKEN`:
 - `GET /api/runs`
 - `GET /api/locks`
 - `GET /api/audit`

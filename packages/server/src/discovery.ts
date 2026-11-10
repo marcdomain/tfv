@@ -1,11 +1,11 @@
 // Finds terraform / opentofu / terragrunt projects in a checkout and works
-// out which ones a PR affects. No config needed; tfv.yaml projects are
+// out which ones a PR affects. No config needed; teriac.yaml projects are
 // merged on top.
 import { readdirSync, readFileSync, existsSync, lstatSync } from 'node:fs';
 import { join, posix } from 'node:path';
 import type { RepoConfig, ProjectConfig } from './repoConfig.ts';
-import type { Provider } from './tfv.ts';
-import { tfv } from './tfv.ts';
+import type { Provider } from './teriac.ts';
+import { teriac } from './teriac.ts';
 import { matchGlob } from './glob.ts';
 
 export interface Project {
@@ -247,7 +247,7 @@ export const mockedDependencies = (unitDir: string, deps: TgDependency[], output
 
 // Dependencies a failed Terragrunt plan needed but couldn't read: not applied yet, and
 // the unit has no mock_outputs. Terragrunt prints the path relative to the unit
-// ("../vpc"), or relative to the checkout once tfv tidies absolute paths ("./live/prod/vpc").
+// ("../vpc"), or relative to the checkout once teriac tidies absolute paths ("./live/prod/vpc").
 export const unappliedDependencies = (unitDir: string, deps: TgDependency[], output: string): string[] => {
   const hit = new Set<string>();
   for (const m of output.matchAll(/(\S+?)\/terragrunt\.hcl is a dependency of \S+ but detected no outputs/g)) {
@@ -259,11 +259,11 @@ export const unappliedDependencies = (unitDir: string, deps: TgDependency[], out
   return [...hit];
 };
 
-// ---- tfv watch ---------------------------------------------------------------
+// ---- teriac watch ---------------------------------------------------------------
 // Extra files that should replan a project, for anything the config doesn't name:
-//   # tfv:watch lambda/orders/**/*.py scripts/build.sh     (any .tf / .tofu / .hcl file)
-//   locals { tfv_watch = ["${get_repo_root()}/lambda/**"] } (Terragrunt, with functions)
-//   watch: [...]                                           (tfv.yaml, per project)
+//   # teriac:watch lambda/orders/**/*.py scripts/build.sh     (any .tf / .tofu / .hcl file)
+//   locals { teriac_watch = ["${get_repo_root()}/lambda/**"] } (Terragrunt, with functions)
+//   watch: [...]                                           (teriac.yaml, per project)
 // Relative to the project folder; a leading "/" means the repo root. Globs allowed;
 // a plain folder means everything inside it. Added to automatic detection.
 const toWatchGlob = (root: string, projectDir: string, raw: string): string | null => {
@@ -285,10 +285,10 @@ export const watchGlobs = (root: string, projectDir: string, files: { name: stri
   const add = (raw: string) => { const g = toWatchGlob(root, projectDir, raw); if (g) out.add(g); };
   configured.forEach(add);
   for (const f of files) {
-    for (const m of f.text.matchAll(/(?:#|\/\/)\s*tfv:watch\s+([^\n]+)/g)) m[1].trim().split(/\s+/).forEach(add);
+    for (const m of f.text.matchAll(/(?:#|\/\/)\s*teriac:watch\s+([^\n]+)/g)) m[1].trim().split(/\s+/).forEach(add);
     if (f.name.endsWith('.hcl')) {
       const expanded = expandLocals(expandFunctions(f.text, root, projectDir));
-      for (const m of expanded.matchAll(/tfv_watch\s*=\s*\[([\s\S]*?)\]/g)) {
+      for (const m of expanded.matchAll(/teriac_watch\s*=\s*\[([\s\S]*?)\]/g)) {
         for (const q of m[1].matchAll(/"([^"\n]*)"/g)) if (!q[1].includes('${')) add(q[1]);
       }
     }
@@ -309,9 +309,9 @@ const prefersTofu = (root: string, dir: string, terragrunt: string | null): bool
   if (terragrunt && /terraform_binary\s*=\s*"tofu"/.test(terragrunt)) return true;
   for (const d of [dir, ...parentDirs(dir)]) {
     const abs = d === '.' ? root : join(root, d);
-    const tofu = tfv().findVersionFile(abs, 'opentofu', { strict: true });
+    const tofu = teriac().findVersionFile(abs, 'opentofu', { strict: true });
     if (tofu) return true;
-    if (tfv().findVersionFile(abs, 'terraform', { strict: true })) return false;
+    if (teriac().findVersionFile(abs, 'terraform', { strict: true })) return false;
   }
   return false;
 };
@@ -419,7 +419,7 @@ export const discoverProjects = (root: string, repoConfig: RepoConfig): Project[
   const projects = [...found.values()].sort((a, b) => a.name.localeCompare(b.name));
   const names = new Set<string>();
   for (const p of projects) {
-    if (names.has(p.name)) throw new Error(`two projects are named "${p.name}"; give them unique names in tfv.yaml`);
+    if (names.has(p.name)) throw new Error(`two projects are named "${p.name}"; give them unique names in teriac.yaml`);
     names.add(p.name);
   }
   return projects;

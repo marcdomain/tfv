@@ -13,7 +13,7 @@ const write = (path: string, text = '') => {
 };
 
 before(() => {
-  root = mkdtempSync(join(tmpdir(), 'tfv-disc-'));
+  root = mkdtempSync(join(tmpdir(), 'teriac-disc-'));
   // Plain terraform root modules using a shared local module.
   write('.terraform-version', '1.9.8\n');
   write('envs/prod/main.tf', 'module "net" {\n  source = "../../modules/network"\n}\n');
@@ -78,8 +78,8 @@ test('unrelated files plan nothing', () => {
   assert.deepEqual(affectedProjects(projects, ['README.md', 'docs/x.md']), []);
 });
 
-test('tfv.yaml adds names, workspaces and watch globs', () => {
-  write('tfv.yaml', [
+test('teriac.yaml adds names, workspaces and watch globs', () => {
+  write('teriac.yaml', [
     'projects:',
     '  - name: prod-network',
     '    dir: envs/prod',
@@ -95,21 +95,21 @@ test('tfv.yaml adds names, workspaces and watch globs', () => {
     assert.ok(!names(projects).includes('envs/prod'));
     assert.deepEqual(names(affectedProjects(projects, ['modules/unused/x.tf'])).filter(n => n.startsWith('prod')), ['prod-network-dr']);
   } finally {
-    rmSync(join(root, 'tfv.yaml'));
+    rmSync(join(root, 'teriac.yaml'));
   }
 });
 
 test('repo config cannot point outside the repo', () => {
-  write('tfv.yaml', 'projects:\n  - dir: ../../etc\n');
+  write('teriac.yaml', 'projects:\n  - dir: ../../etc\n');
   try {
     assert.throws(() => loadRepoConfig(root), /must stay inside the repo/);
   } finally {
-    rmSync(join(root, 'tfv.yaml'));
+    rmSync(join(root, 'teriac.yaml'));
   }
 });
 
 test('symlinks are not followed', () => {
-  const outside = mkdtempSync(join(tmpdir(), 'tfv-outside-'));
+  const outside = mkdtempSync(join(tmpdir(), 'teriac-outside-'));
   writeFileSync(join(outside, 'main.tf'), '');
   symlinkSync(outside, join(root, 'linked'));
   try {

@@ -1,4 +1,4 @@
-name: Publish tfv to npm registry
+name: Publish teriac to npm registry
 
 on:
   push:

@@ -1,7 +1,7 @@
 const { join } = require('path');
 const { homedir } = require('os');
 const {
-  TFV_HOME,
+  HOME_DIR,
   getPaths,
   normalizeProvider,
   getCliName,
@@ -9,33 +9,33 @@ const {
   getProviderStore,
 } = require('../lib/utils/paths');
 
-describe('TFV_HOME', () => {
-  test('is under the user home directory', () => {
-    expect(TFV_HOME).toBe(join(homedir(), '.tfv'));
+describe('HOME_DIR', () => {
+  test('is ~/.teriac, or TERIAC_HOME when set', () => {
+    expect(HOME_DIR).toBe(process.env.TERIAC_HOME || join(homedir(), '.teriac'));
   });
 });
 
 describe('getPaths', () => {
   const paths = getPaths();
 
-  test('bin is inside TFV_HOME', () => {
-    expect(paths.bin).toBe(join(TFV_HOME, 'bin'));
+  test('bin is inside HOME_DIR', () => {
+    expect(paths.bin).toBe(join(HOME_DIR, 'bin'));
   });
 
-  test('store is inside TFV_HOME', () => {
-    expect(paths.store).toBe(join(TFV_HOME, 'store'));
+  test('store is inside HOME_DIR', () => {
+    expect(paths.store).toBe(join(HOME_DIR, 'store'));
   });
 
   test('terraform store is correct', () => {
-    expect(paths.terraform).toBe(join(TFV_HOME, 'store', 'terraform'));
+    expect(paths.terraform).toBe(join(HOME_DIR, 'store', 'terraform'));
   });
 
   test('opentofu store is correct', () => {
-    expect(paths.opentofu).toBe(join(TFV_HOME, 'store', 'opentofu'));
+    expect(paths.opentofu).toBe(join(HOME_DIR, 'store', 'opentofu'));
   });
 
-  test('active.json is in TFV_HOME', () => {
-    expect(paths.active).toBe(join(TFV_HOME, 'active.json'));
+  test('active.json is in HOME_DIR', () => {
+    expect(paths.active).toBe(join(HOME_DIR, 'active.json'));
   });
 });
 
@@ -57,15 +57,15 @@ describe('getCliName', () => {
 
 describe('getProviderStore', () => {
   test('returns terraform store by default', () => {
-    expect(getProviderStore()).toBe(join(TFV_HOME, 'store', 'terraform'));
+    expect(getProviderStore()).toBe(join(HOME_DIR, 'store', 'terraform'));
   });
 
   test('returns opentofu store for tofu alias', () => {
-    expect(getProviderStore('tofu')).toBe(join(TFV_HOME, 'store', 'opentofu'));
+    expect(getProviderStore('tofu')).toBe(join(HOME_DIR, 'store', 'opentofu'));
   });
 
   test('returns opentofu store', () => {
-    expect(getProviderStore('opentofu')).toBe(join(TFV_HOME, 'store', 'opentofu'));
+    expect(getProviderStore('opentofu')).toBe(join(HOME_DIR, 'store', 'opentofu'));
   });
 });
 
@@ -84,7 +84,7 @@ describe('terragrunt provider', () => {
   });
 
   test('store path', () => {
-    expect(getProviderStore('tg')).toBe(join(TFV_HOME, 'store', 'terragrunt'));
+    expect(getProviderStore('tg')).toBe(join(HOME_DIR, 'store', 'terragrunt'));
   });
 
   test('provider flag for hints', () => {

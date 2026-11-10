@@ -1,4 +1,4 @@
-// Repo-side config: tfv.yaml.
+// Repo-side config: teriac.yaml.
 // It can describe projects and add rules; policy.ts makes sure repo rules can
 // only tighten what the server allows.
 import { existsSync, readFileSync } from 'node:fs';
@@ -6,7 +6,7 @@ import { join } from 'node:path';
 import YAML from 'yaml';
 import type { ApprovalRule, ProjectRule, Requirement, Action, Principal, DriftSchedule } from './config.ts';
 import { REQUIREMENTS, validateDrift } from './config.ts';
-import type { Provider } from './tfv.ts';
+import type { Provider } from './teriac.ts';
 
 export interface ProjectConfig {
   name?: string;
@@ -23,12 +23,12 @@ export interface ProjectConfig {
 }
 
 export interface RepoConfig {
-  source: 'tfv.yaml' | null;
+  source: string | null;          // the file it came from (teriac.yaml or teriac.yml)
   autodiscover: boolean;
   projects: ProjectConfig[];
   apply_requirements: Requirement[];
   rules: ProjectRule[];           // tighten-only rules from the repo
-  drift: DriftSchedule[];         // scheduled drift checks (tfv.yaml only)
+  drift: DriftSchedule[];         // scheduled drift checks (teriac.yaml only)
   require_apply_project: boolean; // a repo can turn this on, never off
   warnings: string[];
 }
@@ -50,7 +50,7 @@ const requirements = (list: unknown, where: string, warnings: string[]): Require
 
 const ENGINES: Provider[] = ['terraform', 'opentofu', 'terragrunt'];
 
-const parseTfv = (doc: Record<string, any>): RepoConfig => {
+const parseConfig = (doc: Record<string, any>): RepoConfig => {
   const warnings: string[] = [];
   const projects: ProjectConfig[] = (doc.projects ?? []).map((p: Record<string, any>, i: number) => {
     const engine = p.engine === 'tofu' ? 'opentofu' : p.engine;
@@ -71,7 +71,7 @@ const parseTfv = (doc: Record<string, any>): RepoConfig => {
       .map(p => ({ match: p.name ?? p.dir, approvals: p.approvals, permissions: p.permissions, apply_requirements: p.apply_requirements })),
   ];
   return {
-    source: 'tfv.yaml',
+    source: 'teriac.yaml',
     autodiscover: doc.autodiscover !== false,
     projects,
     apply_requirements: requirements(doc.apply_requirements, 'apply_requirements', warnings),
@@ -82,12 +82,12 @@ const parseTfv = (doc: Record<string, any>): RepoConfig => {
   };
 };
 
-export const REPO_CONFIG_FILES = ['tfv.yaml', 'tfv.yml'];
+export const REPO_CONFIG_FILES = ['teriac.yaml', 'teriac.yml'];
 
 export const parseRepoConfig = (file: string, text: string): RepoConfig => {
   const doc = YAML.parse(text) ?? {};
   try {
-    return parseTfv(doc);
+    return { ...parseConfig(doc), source: file };
   } catch (err) {
     throw new Error(`${file}: ${(err as Error).message}`);
   }
