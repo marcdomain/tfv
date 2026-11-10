@@ -14,7 +14,7 @@ describeUnix('plugin-cache', () => {
   let homeSpy;
 
   beforeEach(() => {
-    home = fs.mkdtempSync(join(os.tmpdir(), 'tfv-pc-'));
+    home = fs.mkdtempSync(join(os.tmpdir(), 'teriac-pc-'));
     // Jest doesn't pass a changed HOME through to os.homedir(), so stub it.
     homeSpy = jest.spyOn(os, 'homedir').mockReturnValue(home);
     // Never touch the real home directory.
@@ -31,7 +31,7 @@ describeUnix('plugin-cache', () => {
   test('on creates the cache dir and ~/.terraformrc, but not ~/.tofurc', () => {
     pluginCache('on');
     expect(fs.existsSync(join(home, '.terraform.d', 'plugin-cache'))).toBe(true);
-    expect(read('.terraformrc')).toMatch(/^# tfv plugin cache\nplugin_cache_dir = ".*plugin-cache"\n$/);
+    expect(read('.terraformrc')).toMatch(/^# teriac plugin cache\nplugin_cache_dir = ".*plugin-cache"\n$/);
     expect(fs.existsSync(rc('.tofurc'))).toBe(false);
   });
 
@@ -57,10 +57,19 @@ describeUnix('plugin-cache', () => {
     expect(read('.terraformrc')).toBe('plugin_cache_dir = "/opt/cache"\n');
   });
 
-  test('off removes only what tfv added', () => {
+  test('off removes only what teriac added', () => {
     fs.writeFileSync(rc('.terraformrc'), 'credentials "x" {}\n');
     pluginCache('on');
     pluginCache('off');
     expect(read('.terraformrc')).toBe('credentials "x" {}\n');
+  });
+
+  test('a plugin_cache_dir set by another tool is left alone', () => {
+    const before = 'credentials "app.terraform.io" {}\n\n# set by another tool\nplugin_cache_dir = "/elsewhere"\n';
+    fs.writeFileSync(rc('.terraformrc'), before);
+    pluginCache('on');
+    expect(read('.terraformrc')).toBe(before);
+    pluginCache('off');
+    expect(read('.terraformrc')).toBe(before);
   });
 });

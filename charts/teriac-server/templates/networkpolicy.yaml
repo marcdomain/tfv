@@ -1,0 +1,20 @@
+{{- if .Values.networkPolicy.enabled }}
+# Inbound only from the listed sources (webhooks arrive through your ingress).
+# Outbound stays open: plans reach cloud APIs, registries and git.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "teriac.fullname" . }}
+  labels:
+    {{- include "teriac.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "teriac.selectorLabels" . | nindent 6 }}
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        {{- toYaml .Values.networkPolicy.ingressFrom | nindent 8 }}
+      ports:
+        - port: http
+{{- end }}

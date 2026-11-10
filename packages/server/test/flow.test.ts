@@ -49,7 +49,7 @@ if (cmd === 'show') {
   process.exit(0);
 }
 if (cmd === 'apply') {
-  if (process.env.TFV_GITHUB_PRIVATE_KEY) { console.log('LEAK'); }
+  if (process.env.TERIAC_GITHUB_PRIVATE_KEY) { console.log('LEAK'); }
   console.log('Apply complete! Resources: 3 added, 1 changed, 2 destroyed.'); process.exit(0);
 }
 process.exit(1);
@@ -99,7 +99,7 @@ const comment = (n: number, author: string, body: string) =>
   app.handle(gh, { kind: 'comment', repo, prNumber: n, commentId: '1', author, body });
 
 before(() => {
-  tmp = mkdtempSync(join(tmpdir(), 'tfv-flow-'));
+  tmp = mkdtempSync(join(tmpdir(), 'teriac-flow-'));
   origin = join(tmp, 'origin');
   mkdirSync(join(origin, 'envs/dev'), { recursive: true });
   mkdirSync(join(origin, 'envs/prod'), { recursive: true });
@@ -117,8 +117,8 @@ before(() => {
   const resolver: ToolResolver = { resolve: async () => ({ tool: { provider: 'terraform', version: '1.9.8', binary: fakeTf } }) };
 
   const config: ServerConfig = {
-    port: 0, dataDir: join(tmp, 'data'), publicUrl: 'https://tfv.example.com', parallelism: 2, runTimeoutMs: 60_000,
-    commandNames: ['tfv'], defaultVersion: 'latest', requireApplyProject: false, ackReaction: 'eyes', progressReply: true, commentMode: 'update', spinnerUrl: 'https://tfv.example.com/assets/spinner.gif', auth: { sessionSecret: 'x'.repeat(32), sessionHours: 1, secureCookies: false, users: [] }, channels: {}, people: [],
+    port: 0, dataDir: join(tmp, 'data'), publicUrl: 'https://teriac.example.com', parallelism: 2, runTimeoutMs: 60_000,
+    commandNames: ['teriac'], defaultVersion: 'latest', requireApplyProject: false, ackReaction: 'eyes', progressReply: true, commentMode: 'update', spinnerUrl: 'https://teriac.example.com/assets/spinner.gif', auth: { sessionSecret: 'x'.repeat(32), sessionHours: 1, secureCookies: false, users: [] }, channels: {}, people: [],
     repos: parseReposYaml(`
 repos:
   - id: github.com/acme/*
@@ -140,7 +140,7 @@ repos:
   store = new Store(':memory:');
   gh = new FakeGitHub();
   // A server secret in the env must never reach terraform.
-  app = new App({ config, store, resolver, env: { ...process.env, TFV_GITHUB_PRIVATE_KEY: 'super-secret-key' } });
+  app = new App({ config, store, resolver, env: { ...process.env, TERIAC_GITHUB_PRIVATE_KEY: 'super-secret-key' } });
   gh.prs.set(1, pr(1, 'bob'));
   gh.files.set(1, ['envs/dev/main.tf', 'envs/prod/main.tf']);
 });
@@ -154,7 +154,7 @@ test('1. push → autoplan both projects, sticky comment + checks with Apply but
   await app.handle(gh, { kind: 'pr_opened', repo, pr: pr(1, 'bob') });
   const body = gh.sticky.get(1)!;
   assert.ok(body.startsWith(MARKER));
-  assert.match(body, /tfv · 2 projects/);
+  assert.match(body, /teriac · 2 projects/);
   assert.match(body, /\[!CAUTION\]/);
   assert.match(body, /\| \[`envs\/dev`\]\([^)]+\) \| terraform 1\.9\.8 \| terraform \(built-in\) \| ⚠️ \*\*\+3 ~1 ±1 −1\*\* \| 🔒 1 more approval from write \|/);
   assert.match(body, /\| \[`envs\/prod`\]\([^)]+\) \|.*\| 🔒 1 more approval from team:platform-admins \|/);
@@ -163,15 +163,15 @@ test('1. push → autoplan both projects, sticky comment + checks with Apply but
   assert.match(body, /\| <img src="https:\/\/github\.com\/bob\.png\?size=36" width="18" height="18" align="center" alt=""> \[bob\]\(https:\/\/github\.com\/bob\) \|/);
   assert.doesNotMatch(body, /@bob/);
   assert.match(body, /\*\*Next steps\*\*\n- 🔒 \*\*`envs\/dev`\*\* needs 1 more approval from write\n- 🔒 \*\*`envs\/prod`\*\* needs 1 more approval from team:platform-admins/);
-  assert.match(body, /\[Open in the tfv dashboard\]\(https:\/\/tfv\.example\.com\/#runs\/\d+\)/);
-  const check = gh.checks.get('tfv: envs/prod')!;
+  assert.match(body, /\[Open in the teriac dashboard\]\(https:\/\/teriac\.example\.com\/#runs\/\d+\)/);
+  const check = gh.checks.get('teriac: envs/prod')!;
   assert.equal(check.conclusion, 'neutral');
   assert.equal(check.actions?.[0].identifier, 'apply');
   assert.equal(store.locksForPr('github.com/acme/infra', 1).length, 2);
 });
 
 test('2. apply without approvals is refused with reasons', async () => {
-  await comment(1, 'bob', 'tfv apply');
+  await comment(1, 'bob', 'teriac apply');
   const reply = gh.lastReply();
   assert.match(reply, /\*\*Not applied:\*\*/);
   assert.match(reply, /`envs\/dev`: apply_destroy on `envs\/dev` needs maintain/);
@@ -181,17 +181,17 @@ test('2. apply without approvals is refused with reasons', async () => {
 
 test('3. stale approvals do not count; fresh ones do', async () => {
   gh.reviewsByPr.set(1, [{ user: 'carol', state: 'approved', commitSha: 'an-older-commit' }]);
-  await comment(1, 'erin', 'tfv apply -p envs/dev');
+  await comment(1, 'erin', 'teriac apply -p envs/dev');
   assert.match(gh.lastReply(), /1 more approval from write/);
 
   gh.reviewsByPr.set(1, [{ user: 'carol', state: 'approved', commitSha: head }]);
-  await comment(1, 'erin', 'tfv apply -p envs/dev');
+  await comment(1, 'erin', 'teriac apply -p envs/dev');
   const applies = store.latestRuns('github.com/acme/infra', 1, 'apply');
   assert.deepEqual(applies.map(a => [a.project, a.status]), [['envs/dev', 'success']]);
   assert.doesNotMatch(applies[0].output, /LEAK/); // server secrets stripped from terraform's env
   assert.match(gh.sticky.get(1)!, /\| \[`envs\/dev`\]\([^)]+\) \|.*\| ✅ applied \|/);
   assert.match(gh.sticky.get(1)!, /\*\*Approved by\*\* <img src="https:\/\/github\.com\/carol\.png\?size=36"[^>]*> \[carol\]\(https:\/\/github\.com\/carol\)/);
-  assert.match(gh.sticky.get(1)!, /\*\*To apply:\*\*[^\n]*:\n```\ntfv apply -p envs\/prod\n```/);
+  assert.match(gh.sticky.get(1)!, /\*\*To apply:\*\*[^\n]*:\n```\nteriac apply -p envs\/prod\n```/);
 });
 
 test('4. Apply button on prod: a platform-admin applies after a team approval', async () => {
@@ -202,7 +202,7 @@ test('4. Apply button on prod: a platform-admin applies after a team approval', 
   await app.handle(gh, { kind: 'apply_button', repo, prNumber: 1, project: 'envs/prod', user: 'alice' });
   const applies = store.latestRuns('github.com/acme/infra', 1, 'apply');
   assert.deepEqual(applies.map(a => [a.project, a.status, a.user]), [['envs/dev', 'success', 'erin'], ['envs/prod', 'success', 'alice']]);
-  assert.equal(gh.checks.get('tfv: envs/prod')!.title, 'Applied');
+  assert.equal(gh.checks.get('teriac: envs/prod')!.title, 'Applied');
 });
 
 test('5. a second PR is blocked by the lock, and unblocked after merge', async () => {
@@ -214,7 +214,7 @@ test('5. a second PR is blocked by the lock, and unblocked after merge', async (
   await app.handle(gh, { kind: 'pr_closed', repo, pr: pr(1, 'bob'), merged: true });
   assert.equal(store.locksForPr('github.com/acme/infra', 1).length, 0);
 
-  await comment(2, 'carol', 'tfv plan');
+  await comment(2, 'carol', 'teriac plan');
   assert.match(gh.sticky.get(2)!, /\| \[`envs\/dev`\]\([^)]+\) \| terraform 1\.9\.8 \| terraform \(built-in\) \| ⚠️/);
 });
 
@@ -224,7 +224,7 @@ test('6. read-only users cannot run code; fork-style autoplan is held', async ()
   await app.handle(gh, { kind: 'pr_opened', repo, pr: pr(3, 'mallory') });
   assert.match(gh.sticky.get(3)!, /not planned automatically: plan on `envs\/prod` needs write/);
   assert.equal(store.latestRuns('github.com/acme/infra', 3, 'plan').length, 0);
-  await comment(3, 'mallory', 'tfv plan');
+  await comment(3, 'mallory', 'teriac plan');
   assert.match(gh.sticky.get(3)!, /🚫 plan on `envs\/prod` needs write/);
 });
 
@@ -232,11 +232,11 @@ test('7. every decision is audited; unlock and help work', async () => {
   const audit = store.auditLog(500);
   assert.ok(audit.some(a => a.user === 'bob' && a.action === 'apply_destroy' && !a.allowed));
   assert.ok(audit.some(a => a.user === 'erin' && a.action === 'apply_destroy' && a.allowed));
-  await comment(2, 'carol', 'tfv unlock');
+  await comment(2, 'carol', 'teriac unlock');
   assert.match(gh.lastReply(), /Unlocked `envs\/dev`/);
-  await comment(2, 'carol', 'tfv help');
-  assert.match(gh.lastReply(), /### tfv commands/);
-  await comment(2, 'carol', 'tfv destroy-everything');
+  await comment(2, 'carol', 'teriac help');
+  assert.match(gh.lastReply(), /### teriac commands/);
+  await comment(2, 'carol', 'teriac destroy-everything');
   assert.match(gh.lastReply(), /Unknown command/);
 });
 
@@ -255,14 +255,14 @@ test('9. one project at a time: a bare apply is refused with exact commands; tar
   gh.files.set(9, ['envs/dev/main.tf', 'envs/prod/main.tf']);
   await strict.handle(gh, { kind: 'pr_opened', repo, pr: pr(9, 'bob') });
 
-  await strict.handle(gh, { kind: 'comment', repo, prNumber: 9, commentId: '9', author: 'erin', body: 'tfv apply' });
+  await strict.handle(gh, { kind: 'comment', repo, prNumber: 9, commentId: '9', author: 'erin', body: 'teriac apply' });
   const reply = gh.lastReply();
   assert.match(reply, /applies one project at a time/);
-  assert.match(reply, /```\ntfv apply -p envs\/dev\n```\n\n```\ntfv apply -p envs\/prod\n```/);
+  assert.match(reply, /```\nteriac apply -p envs\/dev\n```\n\n```\nteriac apply -p envs\/prod\n```/);
   assert.equal(store.latestRuns('github.com/acme/infra', 9, 'apply').length, 0);
-  assert.match(gh.sticky.get(9)!, /Apply one project at a time: `tfv apply -p <project>`/);
+  assert.match(gh.sticky.get(9)!, /Apply one project at a time: `teriac apply -p <project>`/);
 
-  await strict.handle(gh, { kind: 'comment', repo, prNumber: 9, commentId: '10', author: 'bob', body: 'tfv plan -p envs/dev -t terraform_data.cdn -t terraform_data.worker[0]' });
+  await strict.handle(gh, { kind: 'comment', repo, prNumber: 9, commentId: '10', author: 'bob', body: 'teriac plan -p envs/dev -t terraform_data.cdn -t terraform_data.worker[0]' });
   const dev = store.latestRuns('github.com/acme/infra', 9, 'plan').find(r => r.project === 'envs/dev')!;
   assert.deepEqual(dev.targets, ['terraform_data.cdn', 'terraform_data.worker[0]']);
   assert.match(dev.output, /ARGS .*-target=terraform_data\.cdn -target=terraform_data\.worker\[0\]/);
@@ -273,16 +273,16 @@ test('9. one project at a time: a bare apply is refused with exact commands; tar
 
 test('10. the pick-up reaction: eyes by default, configurable per repo, or off', async () => {
   const before = gh.reactions.length;
-  await comment(2, 'carol', 'tfv help');
+  await comment(2, 'carol', 'teriac help');
   assert.equal(gh.reactions[before], 'eyes');
   const mk = (ack: string) => new App({
     config: { ...(app as any).deps.config, repos: parseReposYaml(`repos:\n  - id: github.com/acme/*\n    ack_reaction: ${ack}\n`) },
     store, resolver: (app as any).deps.resolver,
   });
-  await mk('rocket').handle(gh, { kind: 'comment', repo, prNumber: 2, commentId: '11', author: 'carol', body: 'tfv help' });
+  await mk('rocket').handle(gh, { kind: 'comment', repo, prNumber: 2, commentId: '11', author: 'carol', body: 'teriac help' });
   assert.equal(gh.reactions.at(-1), 'rocket');
   const n = gh.reactions.length;
-  await mk('none').handle(gh, { kind: 'comment', repo, prNumber: 2, commentId: '12', author: 'carol', body: 'tfv help' });
+  await mk('none').handle(gh, { kind: 'comment', repo, prNumber: 2, commentId: '12', author: 'carol', body: 'teriac help' });
   assert.equal(gh.reactions.length, n, 'no reaction when turned off');
   assert.throws(() => parseReposYaml('repos:\n  - id: x\n    ack_reaction: thumbsup\n'), /ack_reaction must be one of eyes, rocket/);
 });
@@ -304,16 +304,16 @@ test('11. defaults: ⏳ reply at once, then a NEW comment per plan with apply co
   const first = mine()[0].body;
   assert.doesNotMatch(first, /spinner\.gif/, 'the spinning reply was turned into the report');
   assert.match(first, /\| Project \| Engine \| Providers \| Plan \| Apply \| By \|/);
-  assert.match(first, /\*\*To apply:\*\* comment this, or \[\*\*▶ Apply\*\*\]\(https:\/\/github\.test\/runs\/tfv%3A%20envs%2Fdev\):\n```\ntfv apply -p envs\/dev\n```/);
+  assert.match(first, /\*\*To apply:\*\* comment this, or \[\*\*▶ Apply\*\*\]\(https:\/\/github\.test\/runs\/teriac%3A%20envs%2Fdev\):\n```\nteriac apply -p envs\/dev\n```/);
   assert.doesNotMatch(first, /is ready to apply/);
 
   // While a command runs, its reply says so; afterwards it holds that command's report.
   let during = '';
   const realEdit = gh.editComment.bind(gh);
   gh.editComment = async (r, id, body) => { during = gh.comments.find(c => c.id === id)!.body; return realEdit(r, id, body); };
-  await fresh.handle(gh, { kind: 'comment', repo, prNumber: 20, commentId: '20', author: 'bob', body: 'tfv plan -p envs/dev' });
+  await fresh.handle(gh, { kind: 'comment', repo, prNumber: 20, commentId: '20', author: 'bob', body: 'teriac plan -p envs/dev' });
   gh.editComment = realEdit;
-  assert.equal(during, '<img src="https://tfv.example.com/assets/spinner.gif" width="16" height="16" align="center" alt="👀"> Running `tfv plan -p envs/dev` for bob…');
+  assert.equal(during, '<img src="https://teriac.example.com/assets/spinner.gif" width="16" height="16" align="center" alt="👀"> Running `teriac plan -p envs/dev` for bob…');
   assert.equal(mine().length, 2, 'a new comment for the new plan');
   assert.match(mine()[1].body, /`envs\/dev`/);
   assert.doesNotMatch(mine()[1].body, /`envs\/prod`/, 'only the projects this command planned');
@@ -334,7 +334,7 @@ test('13. no public https address for the spinner: just the 👀 reaction, then 
   const noSpin = new App({ config: { ...(app as any).deps.config, ackReaction: 'eyes', progressReply: true, commentMode: 'new', spinnerUrl: null }, store, resolver: (app as any).deps.resolver });
   const reactions = gh.reactions.length;
   const comments = gh.comments.length;
-  await noSpin.handle(gh, { kind: 'comment', repo, prNumber: 21, commentId: '30', author: 'carol', body: 'tfv unlock' });
+  await noSpin.handle(gh, { kind: 'comment', repo, prNumber: 21, commentId: '30', author: 'carol', body: 'teriac unlock' });
   assert.equal(gh.reactions[reactions], 'eyes');
   assert.equal(gh.comments.length, comments + 1, 'just the result, no "Running…" reply');
   assert.doesNotMatch(gh.comments.at(-1)!.body, /spinner/);
@@ -346,10 +346,10 @@ test('14. defaults together: 👀 on the command AND a spinning reply under it',
   let first = '';
   const realComment = gh.comment.bind(gh);
   gh.comment = async (rp, n, body) => { if (!first) first = body; return realComment(rp, n, body); };
-  await both.handle(gh, { kind: 'comment', repo, prNumber: 21, commentId: '40', author: 'carol', body: 'tfv unlock' });
+  await both.handle(gh, { kind: 'comment', repo, prNumber: 21, commentId: '40', author: 'carol', body: 'teriac unlock' });
   gh.comment = realComment;
   assert.equal(gh.reactions[r], 'eyes');
-  assert.match(first, /^<img src="https:\/\/tfv\.example\.com\/assets\/spinner\.gif"[^>]*alt="👀"> Running `tfv unlock` for carol…$/);
+  assert.match(first, /^<img src="https:\/\/teriac\.example\.com\/assets\/spinner\.gif"[^>]*alt="👀"> Running `teriac unlock` for carol…$/);
 });
 
 test('15. policy checks (enforce + override) and the two-person rule', async () => {
@@ -372,16 +372,16 @@ test('15. policy checks (enforce + override) and the two-person rule', async () 
   assert.match(body, /🛡️ 2 policy findings/);
   assert.match(body, /🛡️ \*\*Policy \(enforced: blocks apply\):\*\* 2 findings/);
   assert.match(body, /🔴 \*\*no-prod-destroy\*\* · `terraform_data\.database` · needs a security override/);
-  assert.match(body, /\*\*To apply \(someone other than alice\):\*\* first 2 policy findings \(no-prod-destroy\)[^\n]*\. Then comment:\n```\ntfv apply -p envs\/prod\n```/);
+  assert.match(body, /\*\*To apply \(someone other than alice\):\*\* first 2 policy findings \(no-prod-destroy\)[^\n]*\. Then comment:\n```\nteriac apply -p envs\/prod\n```/);
 
   const say = async (user: string, text: string) => {
     await strict.handle(gh, { kind: 'comment', repo, prNumber: 30, commentId: String(Math.random()), author: user, body: text });
     return gh.lastReply();
   };
-  assert.match(await say('alice', 'tfv apply -p envs/prod'), /two-person rule: someone other than the PR author \(alice\) must apply/);
-  assert.match(await say('erin', 'tfv apply -p envs/prod'), /2 policy findings \(no-prod-destroy\)/);
-  assert.match(await say('erin', 'tfv apply -p envs/prod --override'), /`--override` needs team:platform-admins/);
-  await say('carol', 'tfv apply -p envs/prod --override'); // platform-admins team member
+  assert.match(await say('alice', 'teriac apply -p envs/prod'), /two-person rule: someone other than the PR author \(alice\) must apply/);
+  assert.match(await say('erin', 'teriac apply -p envs/prod'), /2 policy findings \(no-prod-destroy\)/);
+  assert.match(await say('erin', 'teriac apply -p envs/prod --override'), /`--override` needs team:platform-admins/);
+  await say('carol', 'teriac apply -p envs/prod --override'); // platform-admins team member
   const applied = store.latestRuns('github.com/acme/infra', 30, 'apply');
   assert.deepEqual(applied.map(r => [r.project, r.status, r.user]), [['envs/prod', 'success', 'carol']]);
 
@@ -410,25 +410,25 @@ test('16. audit mode reports findings without blocking', async () => {
   assert.match(body, /\| 🟢 ready/);
 });
 
-test('someone edits or deletes a tfv comment: left as is; warning links to it with the original; audited', async () => {
-  await comment(1, 'bob', 'tfv plan -p envs/dev');
+test('someone edits or deletes a teriac comment: left as is; warning links to it with the original; audited', async () => {
+  await comment(1, 'bob', 'teriac plan -p envs/dev');
   const mine = gh.comments.filter(c => c.pr === 1 && c.body.includes('envs/dev')).at(-1)!;
   const original = mine.body;
-  // A user with write access rewrites tfv's comment to hide the destroy.
+  // A user with write access rewrites teriac's comment to hide the destroy.
   mine.body = 'No changes 🙂';
   await app.handle(gh, { kind: 'bot_comment_changed', repo, prNumber: 1, commentId: mine.id, by: 'mallory', change: 'edited', body: 'No changes 🙂' });
   assert.equal(mine.body, 'No changes 🙂', 'not restored');
   const warning = gh.comments.at(-1)!.body;
-  assert.match(warning, new RegExp(`\\*\\*\\[tfv's comment\\]\\(https://github\\.com/acme/infra/pull/1#issuecomment-${mine.id}\\) was edited by mallory\\.\\*\\*`));
+  assert.match(warning, new RegExp(`\\*\\*\\[teriac's comment\\]\\(https://github\\.com/acme/infra/pull/1#issuecomment-${mine.id}\\) was edited by mallory\\.\\*\\*`));
   assert.match(warning, /<details><summary>View the original<\/summary>/);
-  assert.ok(warning.includes(original.replace(/<!--\s*tfv:[^>]*-->\n?/g, '')), 'carries the original');
-  assert.doesNotMatch(warning, /<!-- tfv:/, 'no hidden markers in the copy');
+  assert.ok(warning.includes(original.replace(/<!--\s*teriac:[^>]*-->\n?/g, '')), 'carries the original');
+  assert.doesNotMatch(warning, /<!-- teriac:/, 'no hidden markers in the copy');
   // Deleted.
   await app.handle(gh, { kind: 'bot_comment_changed', repo, prNumber: 1, commentId: mine.id, by: 'mallory', change: 'deleted', body: '' });
-  assert.match(gh.comments.at(-1)!.body, /A tfv comment was deleted by mallory[\s\S]*View the original/);
+  assert.match(gh.comments.at(-1)!.body, /A teriac comment was deleted by mallory[\s\S]*View the original/);
   const actions = store.searchAudit({}).items.map(a => a.action);
   assert.ok(actions.includes('comment_edited') && actions.includes('comment_deleted'));
-  // A comment tfv didn't write: left alone.
+  // A comment teriac didn't write: left alone.
   const before = gh.comments.length;
   await app.handle(gh, { kind: 'bot_comment_changed', repo, prNumber: 1, commentId: 'not-ours', by: 'x', change: 'edited', body: '' });
   assert.equal(gh.comments.length, before);
@@ -438,46 +438,46 @@ test('Terraform commands: read ones for planners; state changes need permission,
   const last = () => gh.comments.at(-1)!.body;
   const all = (from: number) => gh.comments.slice(from).map(c => c.body).join('\n---\n');
   for (let pr = 1; pr <= 99; pr++) if (pr !== 1) store.releasePrLocks('github.com/acme/infra', pr);
-  await comment(1, 'bob', 'tfv state list -p envs/dev');
-  assert.match(last(), /✅ `tfv state list -p envs\/dev`[\s\S]*```\n\$ terraform state list\nterraform_data\.app\nterraform_data\.cache\n```/);
-  await comment(1, 'bob', 'tfv output -p envs/dev');
+  await comment(1, 'bob', 'teriac state list -p envs/dev');
+  assert.match(last(), /✅ `teriac state list -p envs\/dev`[\s\S]*```\n\$ terraform state list\nterraform_data\.app\nterraform_data\.cache\n```/);
+  await comment(1, 'bob', 'teriac output -p envs/dev');
   assert.match(last(), /app = "demo"/);
   assert.doesNotMatch(last(), /\u001b/, 'colour codes are removed');
-  await comment(1, 'bob', 'tfv fmt -p envs/dev');
-  assert.match(last(), /📝 `tfv fmt -p envs\/dev`\n\nSome files need `terraform fmt`/);
+  await comment(1, 'bob', 'teriac fmt -p envs/dev');
+  assert.match(last(), /📝 `teriac fmt -p envs\/dev`\n\nSome files need `terraform fmt`/);
 
   // bob has write access: enough to import, not to remove from state.
-  await comment(1, 'bob', 'tfv state rm -p envs/dev terraform_data.app');
-  assert.match(last(), /🚫 `tfv state rm -p envs\/dev terraform_data\.app`: state_rm on `envs\/dev` needs maintain/);
+  await comment(1, 'bob', 'teriac state rm -p envs/dev terraform_data.app');
+  assert.match(last(), /🚫 `teriac state rm -p envs\/dev terraform_data\.app`: state_rm on `envs\/dev` needs maintain/);
   // Editing the state directly needs the project's approvals, like an apply.
   gh.reviewsByPr.set(1, []);
-  await comment(1, 'bob', 'tfv import -p envs/dev terraform_data.app abc-123');
-  assert.match(last(), /🔒 `tfv import -p envs\/dev terraform_data\.app abc-123` needs 1 more approval from write/);
+  await comment(1, 'bob', 'teriac import -p envs/dev terraform_data.app abc-123');
+  assert.match(last(), /🔒 `teriac import -p envs\/dev terraform_data\.app abc-123` needs 1 more approval from write/);
   gh.reviewsByPr.set(1, [{ user: 'carol', state: 'approved', commitSha: head }]);
   let from = gh.comments.length;
-  await comment(1, 'bob', 'tfv import -p envs/dev terraform_data.app abc-123');
-  assert.match(all(from), /✅ `tfv import -p envs\/dev terraform_data\.app abc-123`[\s\S]*ARGS -input=false -no-color terraform_data\.app abc-123/);
+  await comment(1, 'bob', 'teriac import -p envs/dev terraform_data.app abc-123');
+  assert.match(all(from), /✅ `teriac import -p envs\/dev terraform_data\.app abc-123`[\s\S]*ARGS -input=false -no-color terraform_data\.app abc-123/);
   assert.match(all(from), /🔁 The state was edited directly, so `envs\/dev` is planned again/);
 
   // erin has maintain: state rm is allowed.
   from = gh.comments.length;
-  await comment(1, 'erin', 'tfv state rm -p envs/dev terraform_data.app');
-  assert.match(all(from), /✅ `tfv state rm -p envs\/dev terraform_data\.app`[\s\S]*Successfully removed 1 resource/);
+  await comment(1, 'erin', 'teriac state rm -p envs/dev terraform_data.app');
+  assert.match(all(from), /✅ `teriac state rm -p envs\/dev terraform_data\.app`[\s\S]*Successfully removed 1 resource/);
 
   const audit = store.searchAudit({}).items.filter(a => a.project === 'envs/dev').map(a => `${a.action}:${a.allowed}`);
   assert.ok(audit.includes('import:true') && audit.includes('state rm:true') && audit.includes('state_rm:false') && audit.includes('import:false'));
 });
 
 test('unlocking from the dashboard tells the PR and drops that plan', async () => {
-  await comment(1, 'bob', 'tfv plan -p envs/dev');
+  await comment(1, 'bob', 'teriac plan -p envs/dev');
   const before = gh.comments.length;
   const ok = await app.dashboardUnlock(gh, { repo: 'github.com/acme/infra', pr: 1, project: 'envs/dev', workspace: 'default', user: 'bob' }, { name: 'Ada Admin', via: 'okta' });
   assert.equal(ok, true);
   const msg = gh.comments.at(-1)!;
   assert.equal(gh.comments.length, before + 1);
   assert.equal(msg.pr, 1);
-  assert.match(msg.body, /🔓 \*\*`envs\/dev` was unlocked from the tfv dashboard\*\* by Ada Admin \(okta\)/);
-  assert.match(msg.body, /```\ntfv plan -p envs\/dev\n```/);
+  assert.match(msg.body, /🔓 \*\*`envs\/dev` was unlocked from the teriac dashboard\*\* by Ada Admin \(okta\)/);
+  assert.match(msg.body, /```\nteriac plan -p envs\/dev\n```/);
   const plan = store.latestRuns('github.com/acme/infra', 1, 'plan').find(r => r.project === 'envs/dev')!;
   assert.equal(plan.planPath, null, 'the plan made under the lock is gone');
 });

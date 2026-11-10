@@ -15,7 +15,7 @@ const write = (path: string, text: string) => {
 };
 
 before(() => {
-  root = mkdtempSync(join(tmpdir(), 'tfv-tg-'));
+  root = mkdtempSync(join(tmpdir(), 'teriac-tg-'));
   write('root.hcl', 'remote_state {}\n');
   write('live/account.hcl', 'locals { account_id = "111" }\n');
   write('live/prod/env.hcl', 'locals { env = "prod" }\n');
@@ -128,7 +128,7 @@ test('unrelated changes plan nothing', () => {
   assert.deepEqual(affected(['README.md', 'docs/runbook.md']), []);
 });
 
-test('tfv watch: comment, Terragrunt local and tfv.yaml; globs; added to automatic detection', async () => {
+test('teriac watch: comment, Terragrunt local and teriac.yaml; globs; added to automatic detection', async () => {
   const { loadRepoConfig } = await import('../src/repoConfig.ts');
   write('lambda/orders/handler.py', 'x\n');
   write('lambda/orders/lib/util.py', 'x\n');
@@ -136,18 +136,18 @@ test('tfv watch: comment, Terragrunt local and tfv.yaml; globs; added to automat
   write('schemas/order.json', '{}\n');
   write('docs/runbook.md', 'x\n');
   // 1. A comment in any project file.
-  write('stacks/orders/main.tf', '# tfv:watch /lambda/orders/**/*.py\nresource "terraform_data" "o" {}\n');
+  write('stacks/orders/main.tf', '# teriac:watch /lambda/orders/**/*.py\nresource "terraform_data" "o" {}\n');
   // 2. A Terragrunt local, using functions.
   write('live/prod/orders/terragrunt.hcl', [
     'locals {',
-    '  tfv_watch = ["${get_repo_root()}/schemas/*.json", "${get_terragrunt_dir()}/../../../lambda/orders"]',
+    '  teriac_watch = ["${get_repo_root()}/schemas/*.json", "${get_terragrunt_dir()}/../../../lambda/orders"]',
     '}',
     'terraform {',
     '  source = "${get_repo_root()}/infra-modules//vpc"',
     '}',
   ].join('\n'));
-  // 3. tfv.yaml.
-  write('tfv.yaml', 'projects:\n  - dir: stacks/iam\n    watch: ["/docs/*.md"]\n');
+  // 3. teriac.yaml.
+  write('teriac.yaml', 'projects:\n  - dir: stacks/iam\n    watch: ["/docs/*.md"]\n');
   try {
     const projects = discoverProjects(root, loadRepoConfig(root));
     const hit = (f: string) => affectedProjects(projects, [f]).map(p => p.name).sort();
@@ -159,7 +159,7 @@ test('tfv watch: comment, Terragrunt local and tfv.yaml; globs; added to automat
     // Still planned by its own files and references: watch adds, never replaces.
     assert.ok(hit('policies/s3.json').includes('stacks/iam'));
   } finally {
-    rmSync(join(root, 'tfv.yaml'));
+    rmSync(join(root, 'teriac.yaml'));
   }
 });
 
@@ -204,8 +204,8 @@ test('a unit without mock_outputs whose dependency is not applied: names the dep
 
   const { renderComment } = await import('../src/render.ts');
   const plan = { id: 1, repo: 'r', pr: 1, project: 'live/prod/app', dir: 'live/prod/app', workspace: 'default', kind: 'plan', status: 'failed', headSha: 'abc1234', user: 'bob', prAuthor: 'bob', startedAt: '', finishedAt: '', engine: 'terragrunt', summary: null, output: relative, planPath: null, hasChanges: false, destroys: 0, targets: [], policy: null, mocks: ['live/prod/vpc'], providers: [], usage: null, applied: null } as any;
-  const body = renderComment({ marker: 'M', headSha: 'abc1234', command: 'tfv', limit: 65000, projects: [{ name: 'live/prod/app', plan, blockers: [] }] });
+  const body = renderComment({ marker: 'M', headSha: 'abc1234', command: 'teriac', limit: 65000, projects: [{ name: 'live/prod/app', plan, blockers: [] }] });
   assert.match(body, /⏳ waiting for `live\/prod\/vpc`/);
-  assert.match(body, /- ⏳ \*\*`live\/prod\/app`\*\* needs `live\/prod\/vpc` applied first:\n  ```\n  tfv apply -p live\/prod\/vpc\n  ```/);
+  assert.match(body, /- ⏳ \*\*`live\/prod\/app`\*\* needs `live\/prod\/vpc` applied first:\n  ```\n  teriac apply -p live\/prod\/vpc\n  ```/);
   assert.match(body, /\*\*Waiting for `live\/prod\/vpc`\*\*, which isn't applied yet and has no outputs, and this unit has no `mock_outputs`/);
 });

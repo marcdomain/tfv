@@ -1,0 +1,23 @@
+teriac server is starting.
+
+1. Point your GitHub App's webhook at:
+   {{- with (include "teriac.publicUrl" .) }}
+     {{ . }}/events/github
+   {{- else }}
+     https://<your-host>/events/github   (enable ingress or set config.publicUrl)
+   {{- end }}
+
+2. Check it:
+     kubectl -n {{ .Release.Namespace }} port-forward svc/{{ include "teriac.fullname" . }} 8080:{{ .Values.service.port }}
+     curl localhost:8080/healthz
+
+3. Open the dashboard at {{ default "the URL above" (include "teriac.publicUrl" .) }}
+   {{- if .Values.dashboard.oidc.enabled }} and sign in with {{ .Values.dashboard.oidc.name }}{{ end }}.
+   {{- if .Values.dashboard.oidc.enabled }}
+   Register this redirect URI with {{ .Values.dashboard.oidc.name }}: {{ include "teriac.publicUrl" . }}/auth/oidc/callback
+   {{- end }}
+
+4. Comment `teriac help` on a pull request.
+{{- if .Values.config.requireApplyProject }}
+   Apply is one project at a time here: `teriac apply -p <project>`.
+{{- end }}

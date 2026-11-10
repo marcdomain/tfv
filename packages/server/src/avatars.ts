@@ -29,7 +29,7 @@ export class Avatars {
     this.fetchImpl = fetchImpl;
   }
 
-  // Only hosts tfv is configured for: never an open image proxy.
+  // Only hosts teriac is configured for: never an open image proxy.
   async get(host: string, login: string): Promise<{ type: string; body: Buffer } | null> {
     const platform = this.hosts[host];
     const source = platform ? avatarSource(platform, host, login) : null;

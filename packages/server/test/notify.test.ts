@@ -10,7 +10,7 @@ const people: Person[] = [
 
 const author = (name: string, email: string, sha: string) => ({ name, email, sha, date: '', subject: 'msg', via: 'resource' as const });
 const report: DriftReport = {
-  repo: 'acme/infra', host: 'github.com', branch: 'main', sha: 'abcdef1234', schedule: 'prod-nightly', cleanCount: 2, url: 'https://tfv.acme.dev/',
+  repo: 'acme/infra', host: 'github.com', branch: 'main', sha: 'abcdef1234', schedule: 'prod-nightly', cleanCount: 2, url: 'https://teriac.acme.dev/',
   projects: [{
     project: 'envs/prod', engine: 'terraform 1.9.8',
     drift: [
@@ -75,7 +75,7 @@ test('Discord only pings mapped users; Google Chat and webhooks get text/JSON', 
   await sendReport('g', { type: 'googlechat', webhook_url_env: 'HOOK' }, report, { people, env, fetchImpl: f });
   assert.match(calls[1].body.text, /\*Drift detected in acme\/infra/);
   await sendReport('w', { type: 'webhook', webhook_url_env: 'HOOK' }, report, { people, env, fetchImpl: f });
-  assert.equal(calls[2].body.event, 'tfv.drift');
+  assert.equal(calls[2].body.event, 'teriac.drift');
   assert.equal(calls[2].body.people[0].people[0].person.name, 'Alice Okafor');
 });
 

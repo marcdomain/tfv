@@ -34,7 +34,7 @@ jobs:
         shell: bash
         run: |
           node lib/utils/postInstall.js
-          test -f "$HOME/.tfv/.setup"
+          test -f "$HOME/.teriac/.setup"
           node index.js --help > /dev/null
           node index.js auto-switch --help > /dev/null
 
@@ -55,7 +55,7 @@ jobs:
           if ($errors) { $errors; exit 1 }
 
   server:
-    name: tfv-server / node 26
+    name: teriac-server / node 26
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
@@ -68,13 +68,13 @@ jobs:
       - run: npm ci --ignore-scripts
 
       - name: Typecheck
-        run: npm run typecheck --workspace tfv-server
+        run: npm run typecheck --workspace teriac-server
 
       - name: Test
-        run: npm test --workspace tfv-server
+        run: npm test --workspace teriac-server
 
   server-image:
-    name: tfv-server image, e2e and Helm on kind
+    name: teriac-server image, e2e and Helm on kind
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
@@ -83,16 +83,16 @@ jobs:
 
       - name: Lint chart
         run: |
-          helm lint charts/tfv-server --set github.appId=1 --set github.existingSecret=s --set 'config.repoAllowlist={github.com/acme/*}'
+          helm lint charts/teriac-server --set github.appId=1 --set github.existingSecret=s --set 'config.repoAllowlist={github.com/acme/*}'
           # Missing required values must fail with a clear message.
-          if helm template t charts/tfv-server > /dev/null 2> err.txt; then echo "expected a failure"; exit 1; fi
+          if helm template t charts/teriac-server > /dev/null 2> err.txt; then echo "expected a failure"; exit 1; fi
           grep -q 'github.appId is required' err.txt
 
       - name: Build image
-        run: docker build -t tfv-server:ci .
+        run: docker build -t teriac-server:ci .
 
       - name: End-to-end (mock GitHub, real git and terraform)
-        run: packages/server/e2e/run.sh tfv-server:ci
+        run: packages/server/e2e/run.sh teriac-server:ci
 
       # kind installed directly, version pinned and checksum verified. Downloads are
       # authenticated (gh + the workflow token), since GitHub sometimes times out
@@ -114,8 +114,8 @@ jobs:
           sha256sum -c kind-linux-amd64.sha256sum
           sudo install -m 0755 kind-linux-amd64 /usr/local/bin/kind
           rm kind-linux-amd64 kind-linux-amd64.sha256sum
-          kind create cluster --name tfv-ci --wait 120s
-          kubectl cluster-info --context kind-tfv-ci
+          kind create cluster --name teriac-ci --wait 120s
+          kubectl cluster-info --context kind-teriac-ci
           get kubernetes-sigs/gateway-api v1.6.3 standard-install.yaml
 
       - uses: actions/setup-node@v5
@@ -125,22 +125,22 @@ jobs:
       - name: Install chart (Gateway API route, dashboard user) and run helm test
         run: |
           kubectl apply --server-side -f standard-install.yaml
-          kind load docker-image tfv-server:ci --name tfv-ci
+          kind load docker-image teriac-server:ci --name teriac-ci
           openssl genrsa -out app.pem 2048
           HASH=$(printf 'ci-admin-password' | node packages/server/src/hash-password.ts)
-          helm install tfv charts/tfv-server -n tfv --create-namespace --wait --timeout 3m \
-            --set image.repository=tfv-server --set image.tag=ci --set image.pullPolicy=Never \
+          helm install teriac charts/teriac-server -n teriac --create-namespace --wait --timeout 3m \
+            --set image.repository=teriac-server --set image.tag=ci --set image.pullPolicy=Never \
             --set github.appId=1 --set-file github.privateKey=app.pem --set github.webhookSecret=ci \
             --set 'config.repoAllowlist={github.com/acme/*}' --set config.requireApplyProject=true \
-            --set httpRoute.enabled=true --set 'httpRoute.parentRefs[0].name=gw' --set 'httpRoute.hostnames[0]=tfv.ci.test' \
+            --set httpRoute.enabled=true --set 'httpRoute.parentRefs[0].name=gw' --set 'httpRoute.hostnames[0]=teriac.ci.test' \
             --set-json "dashboard.users=[{\"username\":\"ci\",\"password_hash\":\"$HASH\",\"role\":\"admin\"}]" \
             --set persistence.size=1Gi --set terminationGracePeriodSeconds=30
-          helm test tfv -n tfv
-          kubectl -n tfv get httproute tfv-tfv-server
-          kubectl -n tfv port-forward svc/tfv-tfv-server 8080:80 & sleep 3
-          curl -sf -X POST localhost:8080/auth/login -H 'X-Requested-With: tfv' -H 'Content-Type: application/json' \
+          helm test teriac -n teriac
+          kubectl -n teriac get httproute teriac-teriac-server
+          kubectl -n teriac port-forward svc/teriac-teriac-server 8080:80 & sleep 3
+          curl -sf -X POST localhost:8080/auth/login -H 'X-Requested-With: teriac' -H 'Content-Type: application/json' \
             -d '{"username":"ci","password":"ci-admin-password"}' | grep -q '"role":"admin"'
-          kubectl -n tfv logs statefulset/tfv-tfv-server | tail -20
+          kubectl -n teriac logs statefulset/teriac-teriac-server | tail -20
 
   package:
     runs-on: ubuntu-latest

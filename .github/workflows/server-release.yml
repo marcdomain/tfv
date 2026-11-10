@@ -1,9 +1,9 @@
-name: Release tfv-server image and chart
+name: Release teriac-server image and chart
 
 on:
   push:
     tags:
-      - 'server-v[0-9]+.[0-9]+.[0-9]+'   # e.g. server-v0.1.0 (CLI releases use v*)
+      - 'server-v[0-9]+.[0-9]+.[0-9]+'   # e.g. server-v0.1.1 (CLI releases use v*)
 
 permissions:
   contents: read
@@ -25,8 +25,8 @@ jobs:
           git merge-base --is-ancestor "$GITHUB_SHA" origin/main || { echo "tag is not on main"; exit 1; }
           VERSION="${GITHUB_REF_NAME#server-v}"
           PKG=$(node -p "require('./packages/server/package.json').version")
-          APP=$(grep '^appVersion:' charts/tfv-server/Chart.yaml | tr -d '"' | awk '{print $2}')
-          CHART=$(grep '^version:' charts/tfv-server/Chart.yaml | awk '{print $2}')
+          APP=$(grep '^appVersion:' charts/teriac-server/Chart.yaml | tr -d '"' | awk '{print $2}')
+          CHART=$(grep '^version:' charts/teriac-server/Chart.yaml | awk '{print $2}')
           for v in "$PKG" "$APP" "$CHART"; do
             [ "$v" = "$VERSION" ] || { echo "version mismatch: tag=$VERSION package=$PKG appVersion=$APP chart=$CHART"; exit 1; }
           done
@@ -42,9 +42,9 @@ jobs:
           node-version: 26
           cache: 'npm'
       - run: npm ci --ignore-scripts
-      - run: npm run typecheck --workspace tfv-server
-      - run: npm test --workspace tfv-server
-      - run: docker build -t tfv-server:release-test . && packages/server/e2e/run.sh tfv-server:release-test
+      - run: npm run typecheck --workspace teriac-server
+      - run: npm test --workspace teriac-server
+      - run: docker build -t teriac-server:release-test . && packages/server/e2e/run.sh teriac-server:release-test
 
   image:
     needs: [verify, test]
@@ -72,15 +72,15 @@ jobs:
           sbom: true
           provenance: mode=max
           tags: |
-            ghcr.io/${{ github.repository_owner }}/tfv-server:${{ needs.verify.outputs.version }}
-            ghcr.io/${{ github.repository_owner }}/tfv-server:latest
+            ghcr.io/${{ github.repository_owner }}/teriac-server:${{ needs.verify.outputs.version }}
+            ghcr.io/${{ github.repository_owner }}/teriac-server:latest
           labels: |
             org.opencontainers.image.source=https://github.com/${{ github.repository }}
             org.opencontainers.image.version=${{ needs.verify.outputs.version }}
             org.opencontainers.image.licenses=MIT
       - uses: sigstore/cosign-installer@v3
       - name: Sign the image
-        run: cosign sign --yes "ghcr.io/${{ github.repository_owner }}/tfv-server@${{ steps.build.outputs.digest }}"
+        run: cosign sign --yes "ghcr.io/${{ github.repository_owner }}/teriac-server@${{ steps.build.outputs.digest }}"
 
   chart:
     needs: [verify, image]
@@ -94,5 +94,5 @@ jobs:
       - name: Package and push the chart
         run: |
           echo "${{ secrets.GITHUB_TOKEN }}" | helm registry login ghcr.io -u "${{ github.actor }}" --password-stdin
-          helm package charts/tfv-server --destination dist
-          helm push "dist/tfv-server-${{ needs.verify.outputs.version }}.tgz" "oci://ghcr.io/${{ github.repository_owner }}/charts"
+          helm package charts/teriac-server --destination dist
+          helm push "dist/teriac-server-${{ needs.verify.outputs.version }}.tgz" "oci://ghcr.io/${{ github.repository_owner }}/charts"

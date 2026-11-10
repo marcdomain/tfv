@@ -6,7 +6,7 @@ import { join } from 'node:path';
 import { Store } from '../src/store.ts';
 
 test('metrics for a custom date range: only runs inside it, "to" exclusive', () => {
-  const dir = mkdtempSync(join(tmpdir(), 'tfv-stats-'));
+  const dir = mkdtempSync(join(tmpdir(), 'teriac-stats-'));
   const store = new Store(join(dir, 'db.sqlite'));
   try {
     const at = (iso: string, kind: 'plan' | 'apply', usage?: object, applied?: object) => {

@@ -1,6 +1,6 @@
 {
-  "name": "tfv-server",
-  "version": "0.1.0",
+  "name": "teriac-server",
+  "version": "0.1.1",
   "private": true,
   "description": "Self-hosted pull request automation for Terraform, OpenTofu and Terragrunt",
   "type": "module",

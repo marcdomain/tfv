@@ -1,15 +1,17 @@
-# tfv brand
+# teriac brand
 
-A block for infrastructure whose top meets the sides in a **v**, for versions, with a fainter
-**v** below it for the versions stacked underneath. The mark and wordmark are drawn as shapes, not
-type, so they look the same everywhere.
+A block of infrastructure being built: its sides are solid, its top is still a dashed outline.
+Planned, then applied, which is what teriac does. One flat colour (indigo `#4f46e5`, or `#818cf8`
+on dark backgrounds); the mark and favicon switch between them with the viewer's theme. The mark
+and wordmark are drawn as shapes, not type, so they look the same everywhere.
 
 | File | Use |
 |---|---|
-| `tfv-logo.svg` / `.png` | Mark and wordmark, on light backgrounds (docs header) |
-| `tfv-logo-dark.svg` / `.png` | The same, on dark backgrounds |
-| `tfv-mark.svg`, `tfv-mark-512.png` | The mark alone (app icons, small spaces) |
-| `tfv-avatar.svg` / `.png` | Round profile picture: GitHub App, social |
+| `teriac-logo.svg` / `.png` | Mark and wordmark, on light backgrounds (docs header) |
+| `teriac-logo-dark.svg` / `.png` | The same, on dark backgrounds |
+| `teriac-mark.svg`, `teriac-mark-512.png` | The mark alone (app icons, small spaces) |
+| `teriac-app-icon.svg` / `.png` | Square icon, 512×512, full-bleed (no lettering): GitHub App logo, app stores, chat bots |
+| `teriac-avatar.svg` / `.png` | Round profile picture: social profiles |
 | `favicon.svg`, `favicon-32.png`, `apple-touch-icon.png` | Browser tab and home screen |
 | `social-preview.png` | 1280×640 link preview: GitHub repo social preview, Open Graph image for the website |
 

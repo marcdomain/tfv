@@ -32,7 +32,7 @@ for (const [path, file, type] of [
 ] as const) {
   try { WEB[path] = { type, body: readFileSync(join(WEB_DIR, file), 'utf-8') }; } catch { /* dashboard not shipped */ }
 }
-// The spinner GitHub shows in tfv's "Running…" replies (fetched by GitHub, so no auth).
+// The spinner GitHub shows in teriac's "Running…" replies (fetched by GitHub, so no auth).
 let SPINNER: Buffer | null = null;
 try { SPINNER = readFileSync(join(WEB_DIR, 'spinner.gif')); } catch { /* not shipped */ }
 
@@ -41,6 +41,7 @@ let VERSION = 'dev';
 try { VERSION = JSON.parse(readFileSync(join(WEB_DIR, '..', 'package.json'), 'utf-8')).version ?? 'dev'; } catch { /* not shipped */ }
 const STARTED_AT = new Date().toISOString();
 const statsCache = new Map<string, { at: number; data: ReturnType<Store['stats']> }>();
+
 
 const WEB_HEADERS = {
   // Everything comes from this server; nothing inline, nothing third-party.
@@ -122,7 +123,7 @@ export const createHttpServer = (deps: HttpDeps): Server => {
       return res.end(SPINNER);
     }
     if (req.method === 'GET' && url.pathname === '/metrics') {
-      return send(res, 200, metrics.render({ tfv_locks: deps.store.allLocks().length }), 'text/plain; version=0.0.4');
+      return send(res, 200, metrics.render({ teriac_locks: deps.store.allLocks().length }), 'text/plain; version=0.0.4');
     }
 
     const hook = /^\/events\/([a-z]+)$/.exec(url.pathname);
@@ -152,7 +153,7 @@ export const createHttpServer = (deps: HttpDeps): Server => {
       });
     }
     if (req.method === 'POST' && url.pathname === '/auth/login') {
-      if (req.headers['x-requested-with'] !== 'tfv') return send(res, 403, { error: 'missing X-Requested-With header' });
+      if (req.headers['x-requested-with'] !== 'teriac') return send(res, 403, { error: 'missing X-Requested-With header' });
       const body = JSON.parse((await readBody(req)).toString('utf-8') || '{}');
       const username = String(body.username ?? '');
       const ip = String(req.headers['x-forwarded-for'] ?? req.socket.remoteAddress ?? '').split(',')[0].trim();
@@ -210,7 +211,7 @@ export const createHttpServer = (deps: HttpDeps): Server => {
       if (!who) return send(res, 401, { error: 'sign in first' });
       const isWrite = req.method !== 'GET';
       // Browsers can't add this header to a cross-site request without CORS approval.
-      if (isWrite && who.cookie && req.headers['x-requested-with'] !== 'tfv') return send(res, 403, { error: 'missing X-Requested-With header' });
+      if (isWrite && who.cookie && req.headers['x-requested-with'] !== 'teriac') return send(res, 403, { error: 'missing X-Requested-With header' });
       const need = (role: Role) => ROLE_RANK[who.role] >= ROLE_RANK[role];
 
       if (req.method === 'GET' && url.pathname === '/api/me') {

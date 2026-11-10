@@ -28,7 +28,7 @@ export const redact = (text: string): string => {
 
 type Level = 'debug' | 'info' | 'warn' | 'error';
 const ORDER: Record<Level, number> = { debug: 10, info: 20, warn: 30, error: 40 };
-const threshold = ORDER[(process.env.TFV_LOG_LEVEL as Level) || 'info'] ?? 20;
+const threshold = ORDER[(process.env.TERIAC_LOG_LEVEL as Level) || 'info'] ?? 20;
 
 const write = (level: Level, msg: string, fields: Record<string, unknown> = {}) => {
   if (ORDER[level] < threshold) return;

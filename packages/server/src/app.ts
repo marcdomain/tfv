@@ -21,7 +21,7 @@ import { evaluateRules, runCommands, stricter, type PolicyConfig, type PolicyRes
 import { matchGlob } from './glob.ts';
 import { metrics } from './metrics.ts';
 
-export const MARKER = '<!-- tfv:summary -->';
+export const MARKER = '<!-- teriac:summary -->';
 
 // Serializes work per key (one PR at a time) while other PRs run in parallel.
 export class KeyedQueue {
@@ -203,7 +203,7 @@ export class App {
   // Runs going and waiting right now, for the Metrics page.
   get runQueue() { return this.sched.stats; }
 
-  // Wraps an adapter so every comment tfv writes is remembered exactly as written.
+  // Wraps an adapter so every comment teriac writes is remembered exactly as written.
   private recording(adapter: VcsAdapter): VcsAdapter {
     const store = this.deps.store;
     const keyOf = (repo: Repo) => `${repo.host}/${repo.fullName}`;
@@ -227,8 +227,8 @@ export class App {
     }) as VcsAdapter;
   }
 
-  // Someone edited or deleted tfv's comment. It's left as it is; tfv posts a warning
-  // that links to it and carries the original, and audits it. (tfv never reads its
+  // Someone edited or deleted teriac's comment. It's left as it is; teriac posts a warning
+  // that links to it and carries the original, and audits it. (teriac never reads its
   // comments back, so an edit can't change what gets applied.)
   private async commentChanged(adapter: VcsAdapter, e: Extract<VcsEvent, { kind: 'bot_comment_changed' }>): Promise<void> {
     const repoKey = `${e.repo.host}/${e.repo.fullName}`;
@@ -236,16 +236,16 @@ export class App {
     if (!saved) return; // another bot's comment
     if (e.change === 'edited' && e.body === saved.body) return;
     const url = repoLinks(repoKey, platformForHost(e.repo.host, { [e.repo.host]: e.repo.platform })).comment(e.prNumber, e.commentId);
-    // The original, minus tfv's hidden markers so it is never mistaken for the live comment.
-    const original = saved.body.replace(/<!--\s*tfv:[^>]*-->\n?/g, '');
+    // The original, minus teriac's hidden markers so it is never mistaken for the live comment.
+    const original = saved.body.replace(/<!--\s*teriac:[^>]*-->\n?/g, '');
     const room = adapter.commentLimit - 1200;
     const shown = original.length > room ? `${original.slice(0, room)}\n\n_…cut short; the full plan is on the check run and the dashboard._` : original;
     await adapter.comment(e.repo, e.prNumber, [
       '> [!WARNING]',
       e.change === 'edited'
-        ? `> **[tfv's comment](${url}) was edited by ${e.by}.** It no longer shows what tfv wrote. This was logged.`
-        : `> **A tfv comment was deleted by ${e.by}.** This was logged.`,
-      `> tfv only acts on its own records (saved plans, check runs, the dashboard), never on comment text.`,
+        ? `> **[teriac's comment](${url}) was edited by ${e.by}.** It no longer shows what teriac wrote. This was logged.`
+        : `> **A teriac comment was deleted by ${e.by}.** This was logged.`,
+      `> teriac only acts on its own records (saved plans, check runs, the dashboard), never on comment text.`,
       '',
       `<details><summary>View the original</summary>`,
       '',
@@ -253,8 +253,8 @@ export class App {
       '',
       '</details>',
     ].join('\n'));
-    this.deps.store.audit({ repo: repoKey, pr: e.prNumber, user: e.by, action: `comment_${e.change}`, project: '', allowed: false, reason: `${e.change} tfv comment ${e.commentId} (${url})` });
-    log.warn('tfv comment changed by someone else', { repo: repoKey, pr: e.prNumber, by: e.by, change: e.change });
+    this.deps.store.audit({ repo: repoKey, pr: e.prNumber, user: e.by, action: `comment_${e.change}`, project: '', allowed: false, reason: `${e.change} teriac comment ${e.commentId} (${url})` });
+    log.warn('teriac comment changed by someone else', { repo: repoKey, pr: e.prNumber, by: e.by, change: e.change });
   }
 
   async handle(rawAdapter: VcsAdapter, event: VcsEvent): Promise<void> {
@@ -285,7 +285,7 @@ export class App {
         }
       } catch (err) {
         log.error('event failed', { key, kind: event.kind, err });
-        await adapter.comment(event.repo, number, `⚠️ tfv hit an error: ${(err as Error).message}`).catch(() => {});
+        await adapter.comment(event.repo, number, `⚠️ teriac hit an error: ${(err as Error).message}`).catch(() => {});
       }
     });
   }
@@ -355,7 +355,7 @@ export class App {
     for (const p of targets) {
       const d = await this.allowed(ctx, 'plan', ctx.pr.author, p);
       if (d.allowed) allowedTargets.push(p);
-      else notes.set(p.name, `not planned automatically: ${d.reason}. Someone allowed can comment \`tfv plan\`.`);
+      else notes.set(p.name, `not planned automatically: ${d.reason}. Someone allowed can comment \`teriac plan\`.`);
     }
     if (this.commentMode(ctx) === 'update') return this.plans(ctx, allowedTargets, ctx.pr.author, {}, notes);
     if (!targets.length) return;
@@ -387,7 +387,7 @@ export class App {
       await work();
     } catch (err) {
       log.error('command failed', { err });
-      reply.say(`⚠️ tfv hit an error: ${(err as Error).message}`);
+      reply.say(`⚠️ teriac hit an error: ${(err as Error).message}`);
     }
     await reply.send();
   }
@@ -566,12 +566,12 @@ export class App {
   private env(ctx: PrContext, project: Project, user: string) {
     return toolEnv(this.deps.env ?? process.env, {
       TF_PLUGIN_CACHE_DIR: join(this.deps.config.dataDir, 'plugin-cache'),
-      TFV_PR_NUMBER: String(ctx.pr.number),
-      TFV_HEAD_SHA: ctx.pr.headSha,
-      TFV_PROJECT: project.name,
-      TFV_WORKSPACE: project.workspace,
-      TFV_USER: user,
-      TFV_REPO: ctx.repo.fullName,
+      TERIAC_PR_NUMBER: String(ctx.pr.number),
+      TERIAC_HEAD_SHA: ctx.pr.headSha,
+      TERIAC_PROJECT: project.name,
+      TERIAC_WORKSPACE: project.workspace,
+      TERIAC_USER: user,
+      TERIAC_REPO: ctx.repo.fullName,
     });
   }
 
@@ -581,7 +581,7 @@ export class App {
 
   private async planProject(ctx: PrContext, project: Project, user: string, opts: PlanOpts) {
     const { store, config } = this.deps;
-    const checkName = `tfv: ${project.name}`;
+    const checkName = `teriac: ${project.name}`;
     const started = Date.now();
     const runId = store.startRun({ repo: ctx.repoKey, pr: ctx.pr.number, project: project.name, workspace: project.workspace, kind: 'plan', headSha: ctx.pr.headSha, user, targets: opts.targets, prAuthor: ctx.pr.author, dir: project.dir });
     await this.check(ctx, { name: checkName, headSha: ctx.pr.headSha, externalId: project.name, status: 'in_progress', title: 'Planning…', summary: `Planning \`${project.name}\`` });
@@ -625,7 +625,7 @@ export class App {
       });
       if (policy?.findings.length) store.saveFindings(store.getRun(runId)!, policy.mode, policy.findings);
     } catch (err) {
-      store.finishRun(runId, { status: 'failed', engine, output: `tfv could not run this project: ${(err as Error).message}` });
+      store.finishRun(runId, { status: 'failed', engine, output: `teriac could not run this project: ${(err as Error).message}` });
     }
     metrics.observeRun('plan', store.getRun(runId)!.status, Date.now() - started);
     await this.publishCheck(ctx, project, store.getRun(runId)!);
@@ -750,7 +750,7 @@ export class App {
     const selected = this.select(ctx, cmd, planned);
     if (typeof selected === 'string') return reply.say(`❌ ${selected}`);
     if (!selected.length) {
-      return reply.say('Nothing to apply: no project has a successful plan with changes at the current commit. Run `tfv plan` first.');
+      return reply.say('Nothing to apply: no project has a successful plan with changes at the current commit. Run `teriac plan` first.');
     }
 
     const approvers = await this.approvers(ctx);
@@ -761,7 +761,7 @@ export class App {
     for (const project of this.ordered(selected)) {
       const plan = plans.get(`${project.name}::${project.workspace}`);
       if (!plan || plan.status !== 'success' || !plan.planPath) {
-        notes.set(project.name, 'no plan at the current commit; run `tfv plan` first');
+        notes.set(project.name, 'no plan at the current commit; run `teriac plan` first');
         continue;
       }
       if (!plan.hasChanges) continue;
@@ -870,7 +870,7 @@ export class App {
       if (applied.length) {
         const planOf = new Map(this.deps.store.latestRuns(ctx.repoKey, ctx.pr.number, 'plan').filter(r => r.headSha === ctx.pr.headSha).map(r => [r.project, r]));
         reply.say(renderApplyReport({
-          marker: '<!-- tfv:apply -->', headSha: ctx.pr.headSha, command: this.deps.config.commandNames[0],
+          marker: '<!-- teriac:apply -->', headSha: ctx.pr.headSha, command: this.deps.config.commandNames[0],
           applies: applied.map(r => ({ name: r.project, apply: r, plan: plans.get(`${r.project}::${r.workspace}`) ?? planOf.get(r.project), dir: ctx.projects.find(p => p.name === r.project)?.dir })),
           links: this.commentLinks(ctx), limit: ctx.adapter.commentLimit, dashboardUrl: this.deps.config.publicUrl,
         }));
@@ -897,7 +897,7 @@ export class App {
     const { store, config } = this.deps;
     const started = Date.now();
     const runId = store.startRun({ repo: ctx.repoKey, pr: ctx.pr.number, project: project.name, workspace: project.workspace, kind: 'apply', headSha: ctx.pr.headSha, user, prAuthor: ctx.pr.author, dir: project.dir });
-    await this.check(ctx, { name: `tfv: ${project.name}`, headSha: ctx.pr.headSha, externalId: project.name, status: 'in_progress', title: 'Applying…', summary: `Applying \`${project.name}\` for @${user}` });
+    await this.check(ctx, { name: `teriac: ${project.name}`, headSha: ctx.pr.headSha, externalId: project.name, status: 'in_progress', title: 'Applying…', summary: `Applying \`${project.name}\` for @${user}` });
     let engine = plan.engine;
     try {
       const tools = await this.tools(ctx, project);
@@ -906,7 +906,7 @@ export class App {
       // The counts are saved now, so the Metrics page never has to read logs.
       store.finishRun(runId, { status: r.ok ? 'success' : 'failed', engine, output: r.output, summary: plan.summary, usage: r.usage ?? null, applied: parseApplyResult(r.output) });
     } catch (err) {
-      store.finishRun(runId, { status: 'failed', engine, output: `tfv could not apply this project: ${(err as Error).message}` });
+      store.finishRun(runId, { status: 'failed', engine, output: `teriac could not apply this project: ${(err as Error).message}` });
     }
     metrics.observeRun('apply', store.getRun(runId)!.status, Date.now() - started);
     await this.publishCheck(ctx, project, store.getRun(runId)!);
@@ -930,7 +930,7 @@ export class App {
     }
     if (!cmd.project) store.discardPlans(ctx.repoKey, ctx.pr.number);
     reply.say(released.length
-      ? `🔓 Unlocked ${released.map(p => `\`${p}\``).join(', ')} and discarded the plans. Run \`tfv plan\` to plan again.`
+      ? `🔓 Unlocked ${released.map(p => `\`${p}\``).join(', ')} and discarded the plans. Run \`teriac plan\` to plan again.`
       : 'This PR holds no locks you can release.');
   }
 
@@ -946,7 +946,7 @@ export class App {
     const ws = lock.workspace !== 'default' ? ` (workspace \`${lock.workspace}\`)` : '';
     try {
       await this.recording(adapter).comment(repo, lock.pr, [
-        `🔓 **\`${lock.project}\`${ws} was unlocked from the tfv dashboard** by ${by.name} (${by.via}).`,
+        `🔓 **\`${lock.project}\`${ws} was unlocked from the teriac dashboard** by ${by.name} (${by.via}).`,
         '',
         `Its plan was discarded, and another PR may now plan and apply it. To continue here, plan it again:`,
         ...cmdBlock(`${cmd} plan -p ${lock.project}`),
@@ -976,7 +976,7 @@ export class App {
     const out = renderCheck(project.name, run, blockers);
     const canApply = run.kind === 'plan' && run.status === 'success' && run.hasChanges;
     await this.check(ctx, {
-      name: `tfv: ${project.name}`, headSha: run.headSha, externalId: project.name, status: 'completed',
+      name: `teriac: ${project.name}`, headSha: run.headSha, externalId: project.name, status: 'completed',
       conclusion: run.status === 'success' ? (canApply ? 'neutral' : 'success') : 'failure',
       title: out.title, summary: out.summary, text: out.text,
       actions: canApply ? [{ label: 'Apply', identifier: 'apply', description: `Apply ${project.name}`.slice(0, 40) }] : undefined,
@@ -1032,7 +1032,7 @@ export class App {
     views.sort((a, b) => a.name.localeCompare(b.name));
 
     const body = renderComment({
-      marker: asReply ? '<!-- tfv:report -->' : MARKER, headSha: head, command: config.commandNames[0], projects: views,
+      marker: asReply ? '<!-- teriac:report -->' : MARKER, headSha: head, command: config.commandNames[0], projects: views,
       dashboardUrl: config.publicUrl, limit: ctx.adapter.commentLimit, warnings: ctx.warnings,
       oneProjectPerApply: this.oneAtATime(ctx),
       approvers,

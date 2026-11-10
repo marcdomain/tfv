@@ -1,4 +1,4 @@
-// Minimal GitHub API for end-to-end tests: just the endpoints tfv-server uses.
+// Minimal GitHub API for end-to-end tests: just the endpoints teriac-server uses.
 // State is kept in memory and exposed at GET /_state for assertions.
 import { createServer } from 'node:http';
 import { execFileSync } from 'node:child_process';

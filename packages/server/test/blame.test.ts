@@ -11,7 +11,7 @@ const commit = (name: string, email: string, msg: string) =>
   execFileSync('git', ['-c', `user.name=${name}`, '-c', `user.email=${email}`, 'commit', '-qam', msg], { cwd: root });
 
 before(() => {
-  root = mkdtempSync(join(tmpdir(), 'tfv-blame-'));
+  root = mkdtempSync(join(tmpdir(), 'teriac-blame-'));
   mkdirSync(join(root, 'envs/prod'), { recursive: true });
   execFileSync('git', ['init', '-q', '-b', 'main'], { cwd: root });
   writeFileSync(join(root, 'envs/prod/main.tf'), [

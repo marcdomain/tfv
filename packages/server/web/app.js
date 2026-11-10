@@ -1,11 +1,11 @@
-// tfv server dashboard: a small single-page app over the /api endpoints.
+// teriac server dashboard: a small single-page app over the /api endpoints.
 (() => {
   const $ = (sel) => document.querySelector(sel);
   const esc = (s) => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
   const view = $('#view');
   // An API token (kept for this tab only) or, normally, the session cookie.
   let token = null;
-  try { token = sessionStorage.getItem('tfv-token'); } catch { /* storage blocked */ }
+  try { token = sessionStorage.getItem('teriac-token'); } catch { /* storage blocked */ }
   let me = null;
 
   // ---- API ----------------------------------------------------------------
@@ -14,7 +14,7 @@
       ...opts,
       credentials: 'same-origin',
       headers: {
-        'X-Requested-With': 'tfv',
+        'X-Requested-With': 'teriac',
         ...(token ? { Authorization: `Bearer ${token}` } : {}),
         ...(opts.body ? { 'Content-Type': 'application/json' } : {}),
       },
@@ -76,7 +76,7 @@
   const initials = (name) => String(name || '?').replace(/[^A-Za-z0-9 ._-]/g, '').split(/[\s._-]+/).filter(Boolean).slice(0, 2).map(w => w[0].toUpperCase()).join('') || '?';
   const hue = (name) => { let h = 0; for (const c of String(name)) h = (h * 31 + c.charCodeAt(0)) >>> 0; return h % 8; };
   const ext = (url, text, cls = 'ext') => url ? `<a class="${cls}" href="${esc(url)}" target="_blank" rel="noopener noreferrer">${text}</a>` : text;
-  // Avatar: the platform picture (served by tfv), or initials if there is none.
+  // Avatar: the platform picture (served by teriac), or initials if there is none.
   const avatar = (name, src, size = '') => src
     ? `<img class="av ${size}" src="${esc(src)}" alt="" data-initials="${esc(initials(name))}" data-hue="${hue(name)}" loading="lazy">`
     : `<span class="av ${size} av${hue(name)}" aria-hidden="true">${esc(initials(name))}</span>`;
@@ -301,7 +301,7 @@
   // ---- pages ----------------------------------------------------------------
   const PAGE_SIZES = [10, 25, 50, 100];
   let savedSize = null;
-  try { savedSize = Number(localStorage.getItem('tfv-page-size')); } catch { /* ignore */ }
+  try { savedSize = Number(localStorage.getItem('teriac-page-size')); } catch { /* ignore */ }
   const pageOf = (params) => {
     const size = PAGE_SIZES.includes(Number(params.get('size'))) ? Number(params.get('size')) : PAGE_SIZES.includes(savedSize) ? savedSize : 25;
     const page = Math.max(1, Math.floor(Number(params.get('page')) || 1));
@@ -355,7 +355,7 @@
       const failed = today.filter(r => r.status === 'failed');
       const nextRun = schedules.map(s => s.next).filter(Boolean).sort()[0];
       return `
-        <div class="page-head"><h1>Overview</h1><span class="muted">Everything tfv did across your repos</span></div>
+        <div class="page-head"><h1>Overview</h1><span class="muted">Everything teriac did across your repos</span></div>
         <div class="tiles">
           <a class="tile" href="${listLink('runs', { range: '24h' })}"><span class="n">${today.length}</span><span class="k">runs in the last 24 hours</span></a>
           <a class="tile ${failed.length ? 'bad' : ''}" href="${listLink('runs', { status: 'failed', range: '24h' })}"><span class="n">${failed.length}</span><span class="k">failed runs in 24 hours</span></a>
@@ -407,7 +407,7 @@
       const list = rows.filter(p => !q || `${p.project} ${p.repo} ${p.lastRun.user} ${p.lastApply?.user ?? ''}`.toLowerCase().includes(q))
         .sort((a, b) => sort === 'name' ? a.project.localeCompare(b.project) : sort === 'runs' ? b.runs - a.runs : b.lastRun.id - a.lastRun.id);
       return `
-        <div class="page-head"><h1>Projects</h1><span class="muted">Every project tfv has planned, with who touched it last</span></div>
+        <div class="page-head"><h1>Projects</h1><span class="muted">Every project teriac has planned, with who touched it last</span></div>
         <form class="filters" data-list="projects" autocomplete="off">
           <label class="f grow"><span>Search</span><input type="search" name="q" value="${esc(params.get('q') || '')}" placeholder="Project, repo or person"></label>
           ${select('sort', 'Sort', [['recent', 'Recently active'], ['name', 'Name A–Z'], ['runs', 'Most runs']], params)}
@@ -494,7 +494,7 @@
             <td>${s.next ? esc(new Date(s.next).toLocaleString([], { weekday: 'short', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })) : '—'}</td>
             <td>${s.notify.map(n => `<span class="pill">${esc(n)}</span>`).join(' ')}</td>
             <td>${adminButton('Run now', `data-drift="${esc(s.key)}"`)}</td>
-          </tr>`), 'No drift schedules. Add one under <code>drift:</code> in repos.yaml or a repo\'s tfv.yaml.')}
+          </tr>`), 'No drift schedules. Add one under <code>drift:</code> in repos.yaml or a repo\'s teriac.yaml.')}
         </div>
         ${findings.map(d => {
           const f = d.finding;
@@ -506,7 +506,7 @@
               <td class="wrap">${x.author ? `${ext(x.links?.commit, `<span class="mono">${esc(x.author.sha.slice(0, 7))}</span>`, 'plain')} <span class="muted">${esc(x.author.subject)}</span>` : ''}</td>
             </tr>`), 'Nothing changed outside Terraform.')}
             <div class="card-foot">
-              <span class="muted small">${f.lastApply ? `Last applied by ${who(f.lastApply.user, f.lastApply.links?.user, null, f.lastApply.links?.userAvatar)} via ${ext(f.lastApply.links?.pr, `PR #${f.lastApply.pr}`, 'plain')}` : 'Never applied through tfv'}${f.pending && Object.values(f.pending).some(Boolean) ? ` · merged but not applied: ${counts(f.pending)}` : ''}</span>
+              <span class="muted small">${f.lastApply ? `Last applied by ${who(f.lastApply.user, f.lastApply.links?.user, null, f.lastApply.links?.userAvatar)} via ${ext(f.lastApply.links?.pr, `PR #${f.lastApply.pr}`, 'plain')}` : 'Never applied through teriac'}${f.pending && Object.values(f.pending).some(Boolean) ? ` · merged but not applied: ${counts(f.pending)}` : ''}</span>
               <span class="muted small">checked ${ago(d.at)}${d.notified ? ` · notified ${d.notified.map(n => esc(n.channel)).join(', ')}` : ''}</span>
             </div>
           </div>`;
@@ -934,7 +934,7 @@
     params.set('size', e.target.value);
     savedSize = Number(e.target.value);
     params.delete('page');
-    try { localStorage.setItem('tfv-page-size', e.target.value); } catch { /* ignore */ }
+    try { localStorage.setItem('teriac-page-size', e.target.value); } catch { /* ignore */ }
     setParams(name, params, name === 'projects');
   });
   view.addEventListener('submit', (e) => { if (e.target.closest('form.filters')) e.preventDefault(); });
@@ -1072,7 +1072,7 @@
   const THEMES = ['system', 'light', 'dark'];
   const ICON = { system: '◐', light: '☀', dark: '☾' };
   let theme = 'system';
-  try { theme = localStorage.getItem('tfv-theme') || 'system'; } catch { /* ignore */ }
+  try { theme = localStorage.getItem('teriac-theme') || 'system'; } catch { /* ignore */ }
   const applyTheme = () => {
     if (theme === 'system') delete document.documentElement.dataset.theme;
     else document.documentElement.dataset.theme = theme;
@@ -1083,7 +1083,7 @@
   };
   $('#theme').addEventListener('click', () => {
     theme = THEMES[(THEMES.indexOf(theme) + 1) % THEMES.length];
-    try { localStorage.setItem('tfv-theme', theme); } catch { /* ignore */ }
+    try { localStorage.setItem('teriac-theme', theme); } catch { /* ignore */ }
     applyTheme();
   });
   applyTheme();
@@ -1101,7 +1101,7 @@
     const conn = $('#connected');
     const ps = who.platforms || [];
     conn.hidden = !ps.length;
-    conn.innerHTML = ps.map(p => `<span class="inline" title="tfv is connected to ${esc(p.name)}">${platformIcon(p.name, 16)} ${esc(p.name)}</span>`).join('');
+    conn.innerHTML = ps.map(p => `<span class="inline" title="teriac is connected to ${esc(p.name)}">${platformIcon(p.name, 16)} ${esc(p.name)}</span>`).join('');
     if (location.hash.startsWith('#signin-error')) history.replaceState(null, '', '#overview');
     route();
   };
@@ -1131,8 +1131,8 @@
 
   function signOut(message) {
     token = null;
-    try { sessionStorage.removeItem('tfv-token'); } catch { /* ignore */ }
-    fetch('/auth/logout', { method: 'POST', headers: { 'X-Requested-With': 'tfv' } }).catch(() => {});
+    try { sessionStorage.removeItem('teriac-token'); } catch { /* ignore */ }
+    fetch('/auth/logout', { method: 'POST', headers: { 'X-Requested-With': 'teriac' } }).catch(() => {});
     showSignIn(message);
   }
 
@@ -1140,7 +1140,7 @@
     e.preventDefault();
     const res = await fetch('/auth/login', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'X-Requested-With': 'tfv' },
+      headers: { 'Content-Type': 'application/json', 'X-Requested-With': 'teriac' },
       body: JSON.stringify({ username: $('#username').value.trim(), password: $('#password').value }),
     }).catch(() => null);
     $('#password').value = '';
@@ -1156,12 +1156,18 @@
     $('#token').value = '';
     const res = await fetch('/api/me', { headers: { Authorization: `Bearer ${token}` } }).catch(() => null);
     if (!res || !res.ok) { token = null; return showSignIn('That token was not accepted.'); }
-    try { sessionStorage.setItem('tfv-token', token); } catch { /* ignore */ }
+    try { sessionStorage.setItem('teriac-token', token); } catch { /* ignore */ }
     signedIn(await res.json());
   });
 
   $('#signout').addEventListener('click', () => signOut());
-  window.addEventListener('hashchange', () => { if (me) route(); });
+  // Moving to another page (sidebar, Back button) cancels an open confirmation or date picker,
+  // so a confirm never acts on a page the user has left.
+  window.addEventListener('hashchange', () => {
+    if (modal.open) modal.close('');
+    if (picker.el) closePicker();
+    if (me) route();
+  });
 
   // Start: an existing session or token signs in straight away.
   (async () => {

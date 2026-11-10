@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="512" height="512">
+  <title>teriac</title>
+  <rect width="64" height="64" fill="#4f46e5"/>
+  <g transform="translate(32 32) scale(0.62) translate(-32 -32.5)"><path d="M32 6 L54 18.5 L32 31 L10 18.5 Z" fill="none" stroke="#fff" stroke-width="4" stroke-linecap="round" stroke-linejoin="round" stroke-dasharray="5 5"/><path d="M10 26 L32 38.5 L32 59 L10 46.5 Z" fill="#fff" stroke="#fff" stroke-width="3" stroke-linejoin="round"/><path d="M54 26 L32 38.5 L32 59 L54 46.5 Z" fill="#fff" fill-opacity="0.72"/></g>
+</svg>

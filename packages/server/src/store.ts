@@ -416,8 +416,8 @@ export class Store {
     });
   }
 
-  // The PR comment tfv keeps updating (single-comment mode).
-  // Every comment tfv writes, as written, so tampering can be spotted and undone.
+  // The PR comment teriac keeps updating (single-comment mode).
+  // Every comment teriac writes, as written, so tampering can be spotted and undone.
   rememberBotComment(repo: string, pr: number, id: string, body: string): void {
     this.db.prepare('INSERT INTO bot_comments (repo, comment_id, pr, body, at) VALUES (?, ?, ?, ?, ?) ON CONFLICT (repo, comment_id) DO UPDATE SET body = excluded.body, at = excluded.at')
       .run(repo, id, pr, body, now());

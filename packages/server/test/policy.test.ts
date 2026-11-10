@@ -42,7 +42,7 @@ repos:
 `)[0];
 
 const rules = (name: string, repoYaml?: string) =>
-  rulesFor(project(name), policy, repoYaml ? parseRepoConfig('tfv.yaml', repoYaml) : emptyRepoConfig());
+  rulesFor(project(name), policy, repoYaml ? parseRepoConfig('teriac.yaml', repoYaml) : emptyRepoConfig());
 
 describe('repo allowlist', () => {
   const repo = (fullName: string): Repo => ({ platform: 'github', host: 'github.com', owner: fullName.split('/')[0], name: fullName.split('/')[1], fullName, cloneUrl: '' });
@@ -147,17 +147,17 @@ describe('repos.yaml validation', () => {
 describe('loadConfig', () => {
   test('a configured repos.yaml that cannot be read is an error, not silently ignored', async () => {
     const { loadConfig } = await import('../src/config.ts');
-    const env = { TFV_DATA_DIR: '/nonexistent-tfv', TFV_REPOS_CONFIG: '/nonexistent-tfv/repos.yaml', TFV_GITHUB_APP_ID: '1', TFV_GITHUB_PRIVATE_KEY: 'k', TFV_GITHUB_WEBHOOK_SECRET: 'w' };
-    assert.throws(() => loadConfig(env), /cannot read TFV_REPOS_CONFIG \(\/nonexistent-tfv\/repos.yaml\): file not found/);
+    const env = { TERIAC_DATA_DIR: '/nonexistent-teriac', TERIAC_REPOS_CONFIG: '/nonexistent-teriac/repos.yaml', TERIAC_GITHUB_APP_ID: '1', TERIAC_GITHUB_PRIVATE_KEY: 'k', TERIAC_GITHUB_WEBHOOK_SECRET: 'w' };
+    assert.throws(() => loadConfig(env), /cannot read TERIAC_REPOS_CONFIG \(\/nonexistent-teriac\/repos.yaml\): file not found/);
   });
 });
 
 describe('spinner availability', () => {
   test('only a public https address can serve the spinner to GitHub', async () => {
     const { spinnerUrlFor } = await import('../src/config.ts');
-    assert.equal(spinnerUrlFor('https://tfv.acme.dev'), 'https://tfv.acme.dev/assets/spinner.gif');
-    assert.equal(spinnerUrlFor('https://tfv.acme.dev/'), 'https://tfv.acme.dev/assets/spinner.gif');
-    for (const u of ['http://tfv.acme.dev', 'https://localhost:8080', 'https://127.0.0.1', 'https://10.0.0.5', 'https://192.168.1.2', 'https://tfv.local', 'not a url']) {
+    assert.equal(spinnerUrlFor('https://teriac.acme.dev'), 'https://teriac.acme.dev/assets/spinner.gif');
+    assert.equal(spinnerUrlFor('https://teriac.acme.dev/'), 'https://teriac.acme.dev/assets/spinner.gif');
+    for (const u of ['http://teriac.acme.dev', 'https://localhost:8080', 'https://127.0.0.1', 'https://10.0.0.5', 'https://192.168.1.2', 'https://teriac.local', 'not a url']) {
       assert.equal(spinnerUrlFor(u), null, u);
     }
   });
@@ -168,12 +168,12 @@ test('by default results are posted once and never edited (no "Running…" reply
   const { mkdtempSync, writeFileSync, rmSync } = await import('node:fs');
   const { tmpdir } = await import('node:os');
   const { join } = await import('node:path');
-  const dir = mkdtempSync(join(tmpdir(), 'tfv-cfg-'));
+  const dir = mkdtempSync(join(tmpdir(), 'teriac-cfg-'));
   try {
     writeFileSync(join(dir, 'repos.yaml'), 'repos:\n  - id: github.com/acme/*\n');
-    const env = { TFV_DATA_DIR: dir, TFV_REPOS_CONFIG: join(dir, 'repos.yaml'), TFV_GITHUB_APP_ID: '1', TFV_GITHUB_PRIVATE_KEY: 'k', TFV_GITHUB_WEBHOOK_SECRET: 'w' };
+    const env = { TERIAC_DATA_DIR: dir, TERIAC_REPOS_CONFIG: join(dir, 'repos.yaml'), TERIAC_GITHUB_APP_ID: '1', TERIAC_GITHUB_PRIVATE_KEY: 'k', TERIAC_GITHUB_WEBHOOK_SECRET: 'w' };
     assert.equal(loadConfig(env).progressReply, false);
-    assert.equal(loadConfig({ ...env, TFV_PROGRESS_REPLY: 'true' }).progressReply, true);
+    assert.equal(loadConfig({ ...env, TERIAC_PROGRESS_REPLY: 'true' }).progressReply, true);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

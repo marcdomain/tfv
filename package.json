@@ -1,18 +1,34 @@
 {
-  "name": "tfv",
-  "version": "6.3.0",
+  "name": "teriac",
+  "version": "0.1.1",
   "publishConfig": {
     "access": "public",
     "provenance": true
   },
   "description": "Terraform, OpenTofu & Terragrunt version manager",
+  "keywords": [
+    "terraform",
+    "opentofu",
+    "terragrunt",
+    "version-manager",
+    "tfenv",
+    "tofuenv",
+    "tgenv",
+    "iac",
+    "devops",
+    "cli"
+  ],
+  "homepage": "https://teriac.marcdomain.dev",
+  "bugs": {
+    "url": "https://github.com/marcdomain/teriac/issues"
+  },
   "main": "index.js",
   "scripts": {
     "postinstall": "node lib/utils/postInstall.js",
     "test": "jest --testPathPatterns=test/"
   },
   "bin": {
-    "tfv": "index.js"
+    "teriac": "index.js"
   },
   "files": [
     "index.js",
@@ -21,18 +37,11 @@
   "workspaces": [
     "packages/*"
   ],
-  "keywords": [
-    "Terraform",
-    "OpenTofu",
-    "Terragrunt",
-    "version",
-    "manager"
-  ],
   "author": "Marcus Chukwuoma <marcus2cu@gmail.com> (https://github.com/marcdomain)",
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "https://github.com/marcdomain/tfv.git"
+    "url": "https://github.com/marcdomain/teriac.git"
   },
   "dependencies": {
     "adm-zip": "^0.6.1",

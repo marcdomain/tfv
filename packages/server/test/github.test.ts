@@ -39,12 +39,12 @@ test('parses PR, comment and Apply-button events', () => {
   assert.equal(pr.kind === 'pr_updated' && pr.repo.installationId, 9);
 
   const c = gh.parse({ 'x-github-event': 'issue_comment' }, {
-    action: 'created', repository, issue: { number: 7, pull_request: {} }, comment: { id: 55, body: 'tfv plan', user: { login: 'bob', type: 'User' } },
+    action: 'created', repository, issue: { number: 7, pull_request: {} }, comment: { id: 55, body: 'teriac plan', user: { login: 'bob', type: 'User' } },
   });
-  assert.deepEqual(c.kind === 'comment' && [c.prNumber, c.commentId, c.author, c.body], [7, '55', 'bob', 'tfv plan']);
+  assert.deepEqual(c.kind === 'comment' && [c.prNumber, c.commentId, c.author, c.body], [7, '55', 'bob', 'teriac plan']);
 
   const bot = gh.parse({ 'x-github-event': 'issue_comment' }, {
-    action: 'created', repository, issue: { number: 7, pull_request: {} }, comment: { id: 56, body: 'tfv apply', user: { login: 'x[bot]', type: 'Bot' } },
+    action: 'created', repository, issue: { number: 7, pull_request: {} }, comment: { id: 56, body: 'teriac apply', user: { login: 'x[bot]', type: 'Bot' } },
   });
   assert.equal(bot.kind, 'ignored');
 
@@ -117,10 +117,10 @@ test('the single updating comment is edited by id, without listing comments', as
 test('webhook: someone else editing a bot comment is reported; the bot editing its own is not', async () => {
   const base = { repository, issue: { number: 7, pull_request: {} } };
   const ev = (sender: string): any => gh.parse({ 'x-github-event': 'issue_comment' }, {
-    ...base, action: 'edited', sender: { login: sender }, comment: { id: 5, body: 'x', user: { login: 'tfv[bot]', type: 'Bot' } },
+    ...base, action: 'edited', sender: { login: sender }, comment: { id: 5, body: 'x', user: { login: 'teriac[bot]', type: 'Bot' } },
   });
   assert.deepEqual({ ...ev('mallory'), repo: undefined }, { kind: 'bot_comment_changed', repo: undefined, prNumber: 7, commentId: '5', by: 'mallory', change: 'edited', body: 'x' });
-  assert.equal(ev('tfv[bot]').kind, 'ignored');
+  assert.equal(ev('teriac[bot]').kind, 'ignored');
 });
 
 test('a repo with no installation id (dashboard, schedules) finds it once and reuses it', async () => {

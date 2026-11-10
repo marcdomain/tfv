@@ -1,5 +1,5 @@
 // Server configuration: environment variables plus the server-side repos.yaml
-// policy file. The repo-side tfv.yaml is in repoConfig.ts.
+// policy file. The repo-side teriac.yaml is in repoConfig.ts.
 import { readFileSync, existsSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import YAML from 'yaml';
@@ -40,15 +40,15 @@ export interface ProjectRule {
 export interface RepoPolicy {
   id: string;                                 // glob on "host/owner/name"
   apply_requirements?: Requirement[];
-  allow_repo_config?: boolean;                // read the repo's tfv.yaml (default true)
-  allow_extra_args?: boolean;                 // `tfv plan -- -var=x` (default false)
+  allow_repo_config?: boolean;                // read the repo's teriac.yaml (default true)
+  allow_extra_args?: boolean;                 // `teriac plan -- -var=x` (default false)
   autoplan?: boolean;                         // default true
   plan_drafts?: boolean;                      // default false
-  allow_repo_schedules?: boolean;             // drift schedules from tfv.yaml (default true)
-  require_apply_project?: boolean;            // refuse a bare `tfv apply`; one project at a time
-  allow_targets?: boolean;                    // `tfv plan -t <address>` (default true)
+  allow_repo_schedules?: boolean;             // drift schedules from teriac.yaml (default true)
+  require_apply_project?: boolean;            // refuse a bare `teriac apply`; one project at a time
+  allow_targets?: boolean;                    // `teriac plan -t <address>` (default true)
   allow_state_changes?: boolean;              // direct state edits: import, taint, state rm/mv, force-unlock (default true)
-  ack_reaction?: Ack;                         // reaction on a command tfv picked up (default: server setting)
+  ack_reaction?: Ack;                         // reaction on a command teriac picked up (default: server setting)
   progress_reply?: boolean;                   // spinning "Running…" reply under the command (default: server setting)
   two_person_rule?: boolean;                  // the PR author may not apply (any project in the repo)
   policies?: PolicyConfig;                    // extra policy rules / stricter mode for this repo
@@ -111,14 +111,14 @@ export interface ServerConfig {
   dataDir: string;
   publicUrl: string;
   parallelism: number;
-  prParallelism?: number;                     // TFV_PR_PARALLELISM: one PR's share (default parallelism - 1)
+  prParallelism?: number;                     // TERIAC_PR_PARALLELISM: one PR's share (default parallelism - 1)
   runTimeoutMs: number;                       // per terraform command
-  commandNames: string[];                     // comment prefixes, e.g. ["tfv"]
+  commandNames: string[];                     // comment prefixes, e.g. ["teriac"]
   defaultVersion: string;                     // when a project pins nothing
-  requireApplyProject: boolean;               // TFV_REQUIRE_APPLY_PROJECT: no bare `tfv apply` anywhere
-  ackReaction: Ack;                           // TFV_ACK_REACTION: reaction on the command (default eyes), or none
-  progressReply: boolean;                     // TFV_PROGRESS_REPLY: spinning "Running…" reply, edited into the result (default off)
-  commentMode: 'new' | 'update';              // TFV_COMMENT_MODE: a new comment per plan (default) or one updated comment
+  requireApplyProject: boolean;               // TERIAC_REQUIRE_APPLY_PROJECT: no bare `teriac apply` anywhere
+  ackReaction: Ack;                           // TERIAC_ACK_REACTION: reaction on the command (default eyes), or none
+  progressReply: boolean;                     // TERIAC_PROGRESS_REPLY: spinning "Running…" reply, edited into the result (default off)
+  commentMode: 'new' | 'update';              // TERIAC_COMMENT_MODE: a new comment per plan (default) or one updated comment
   spinnerUrl: string | null;                  // animated icon GitHub can load; null → fall back to 👀
   github?: GitHubConfig;
   repos: RepoPolicy[];
@@ -219,30 +219,30 @@ export const parseUsers = (list: unknown, where: string): DashboardUser[] => {
 const list = (v: string | undefined) => (v ?? '').split(',').map(s => s.trim()).filter(Boolean);
 
 export const loadAuth = (env: NodeJS.ProcessEnv, publicUrl: string, users: DashboardUser[]): AuthConfig => {
-  const usersFile = env.TFV_DASHBOARD_USERS_FILE;
+  const usersFile = env.TERIAC_DASHBOARD_USERS_FILE;
   if (usersFile) users = [...users, ...parseUsers(YAML.parse(readFileSync(usersFile, 'utf-8')), usersFile)];
   let oidc: AuthConfig['oidc'];
-  if (env.TFV_OIDC_ISSUER) {
-    const clientSecret = readSecret(env, 'TFV_OIDC_CLIENT_SECRET');
-    if (!env.TFV_OIDC_CLIENT_ID || !clientSecret) throw new Error('TFV_OIDC_CLIENT_ID and TFV_OIDC_CLIENT_SECRET are required with TFV_OIDC_ISSUER');
+  if (env.TERIAC_OIDC_ISSUER) {
+    const clientSecret = readSecret(env, 'TERIAC_OIDC_CLIENT_SECRET');
+    if (!env.TERIAC_OIDC_CLIENT_ID || !clientSecret) throw new Error('TERIAC_OIDC_CLIENT_ID and TERIAC_OIDC_CLIENT_SECRET are required with TERIAC_OIDC_ISSUER');
     oidc = {
-      issuer: env.TFV_OIDC_ISSUER.replace(/\/+$/, ''),
-      clientId: env.TFV_OIDC_CLIENT_ID,
+      issuer: env.TERIAC_OIDC_ISSUER.replace(/\/+$/, ''),
+      clientId: env.TERIAC_OIDC_CLIENT_ID,
       clientSecret,
-      name: env.TFV_OIDC_NAME || (/okta(preview)?\.com/.test(env.TFV_OIDC_ISSUER) ? 'Okta' : 'single sign-on'),
-      scopes: list(env.TFV_OIDC_SCOPES || 'openid,profile,email,groups'),
-      groupsClaim: env.TFV_OIDC_GROUPS_CLAIM || 'groups',
-      adminGroups: list(env.TFV_OIDC_ADMIN_GROUPS),
-      allowedGroups: list(env.TFV_OIDC_ALLOWED_GROUPS),
+      name: env.TERIAC_OIDC_NAME || (/okta(preview)?\.com/.test(env.TERIAC_OIDC_ISSUER) ? 'Okta' : 'single sign-on'),
+      scopes: list(env.TERIAC_OIDC_SCOPES || 'openid,profile,email,groups'),
+      groupsClaim: env.TERIAC_OIDC_GROUPS_CLAIM || 'groups',
+      adminGroups: list(env.TERIAC_OIDC_ADMIN_GROUPS),
+      allowedGroups: list(env.TERIAC_OIDC_ALLOWED_GROUPS),
     };
   }
-  const sessionSecret = readSecret(env, 'TFV_SESSION_SECRET');
-  if (sessionSecret && sessionSecret.length < 32) throw new Error('TFV_SESSION_SECRET must be at least 32 characters');
+  const sessionSecret = readSecret(env, 'TERIAC_SESSION_SECRET');
+  if (sessionSecret && sessionSecret.length < 32) throw new Error('TERIAC_SESSION_SECRET must be at least 32 characters');
   return {
-    apiToken: readSecret(env, 'TFV_API_TOKEN'),
+    apiToken: readSecret(env, 'TERIAC_API_TOKEN'),
     // Without a fixed secret, sessions end when the server restarts.
     sessionSecret: sessionSecret || randomBytes(32).toString('hex'),
-    sessionHours: Math.max(1, Number(env.TFV_SESSION_HOURS || 12)),
+    sessionHours: Math.max(1, Number(env.TERIAC_SESSION_HOURS || 12)),
     secureCookies: publicUrl.startsWith('https://'),
     users,
     oidc,
@@ -275,19 +275,19 @@ export const parseReposYaml = (text: string): RepoPolicy[] => {
 };
 
 export const loadConfig = (env: NodeJS.ProcessEnv = process.env): ServerConfig => {
-  const dataDir = resolve(env.TFV_DATA_DIR || '/data');
-  const port = Number(env.TFV_PORT || 8080);
+  const dataDir = resolve(env.TERIAC_DATA_DIR || '/data');
+  const port = Number(env.TERIAC_PORT || 8080);
 
   let policy: ServerPolicy = { repos: [], channels: {}, people: [], users: [] };
-  const reposFile = env.TFV_REPOS_CONFIG || join(dataDir, 'repos.yaml');
+  const reposFile = env.TERIAC_REPOS_CONFIG || join(dataDir, 'repos.yaml');
   // An explicitly configured file must be readable; only the default may be absent.
-  if (env.TFV_REPOS_CONFIG || existsSync(reposFile)) {
+  if (env.TERIAC_REPOS_CONFIG || existsSync(reposFile)) {
     let text: string;
     try {
       text = readFileSync(reposFile, 'utf-8');
     } catch (err) {
       const code = (err as NodeJS.ErrnoException).code;
-      throw new Error(`cannot read TFV_REPOS_CONFIG (${reposFile}): ${code === 'EACCES' ? 'permission denied' : code === 'ENOENT' ? 'file not found' : (err as Error).message}`);
+      throw new Error(`cannot read TERIAC_REPOS_CONFIG (${reposFile}): ${code === 'EACCES' ? 'permission denied' : code === 'ENOENT' ? 'file not found' : (err as Error).message}`);
     }
     try {
       policy = parseServerPolicy(text);
@@ -296,44 +296,44 @@ export const loadConfig = (env: NodeJS.ProcessEnv = process.env): ServerConfig =
     }
   }
   const repos = policy.repos;
-  if (env.TFV_REPO_ALLOWLIST) {
-    repos.push(...env.TFV_REPO_ALLOWLIST.split(',').map(s => s.trim()).filter(Boolean).map(id => ({ id })));
+  if (env.TERIAC_REPO_ALLOWLIST) {
+    repos.push(...env.TERIAC_REPO_ALLOWLIST.split(',').map(s => s.trim()).filter(Boolean).map(id => ({ id })));
   }
   // Safe default: a server that would run code from any repo is refused.
   if (repos.length === 0) {
-    throw new Error('No repos allowed. Set TFV_REPO_ALLOWLIST (e.g. "github.com/acme/*") or provide repos.yaml');
+    throw new Error('No repos allowed. Set TERIAC_REPO_ALLOWLIST (e.g. "github.com/acme/*") or provide repos.yaml');
   }
 
   let github: GitHubConfig | undefined;
-  const appId = env.TFV_GITHUB_APP_ID;
+  const appId = env.TERIAC_GITHUB_APP_ID;
   if (appId) {
-    const privateKey = readSecret(env, 'TFV_GITHUB_PRIVATE_KEY');
-    const webhookSecret = readSecret(env, 'TFV_GITHUB_WEBHOOK_SECRET');
+    const privateKey = readSecret(env, 'TERIAC_GITHUB_PRIVATE_KEY');
+    const webhookSecret = readSecret(env, 'TERIAC_GITHUB_WEBHOOK_SECRET');
     if (!privateKey || !webhookSecret) {
-      throw new Error('TFV_GITHUB_PRIVATE_KEY and TFV_GITHUB_WEBHOOK_SECRET are required with TFV_GITHUB_APP_ID');
+      throw new Error('TERIAC_GITHUB_PRIVATE_KEY and TERIAC_GITHUB_WEBHOOK_SECRET are required with TERIAC_GITHUB_APP_ID');
     }
-    const apiUrl = (env.TFV_GITHUB_API_URL || 'https://api.github.com').replace(/\/+$/, '');
+    const apiUrl = (env.TERIAC_GITHUB_API_URL || 'https://api.github.com').replace(/\/+$/, '');
     const host = apiUrl === 'https://api.github.com' ? 'github.com' : new URL(apiUrl).host;
     github = { appId, privateKey: privateKey.replace(/\\n/g, '\n'), webhookSecret, apiUrl, host };
   }
-  if (!github) throw new Error('No source-control platform configured (set TFV_GITHUB_APP_ID and friends)');
+  if (!github) throw new Error('No source-control platform configured (set TERIAC_GITHUB_APP_ID and friends)');
 
-  const commandNames = ['tfv'];
+  const commandNames = ['teriac'];
 
-  const publicUrl = (env.TFV_PUBLIC_URL || `http://localhost:${port}`).replace(/\/+$/, '');
+  const publicUrl = (env.TERIAC_PUBLIC_URL || `http://localhost:${port}`).replace(/\/+$/, '');
   return {
     port,
     dataDir,
     publicUrl,
-    parallelism: Math.max(1, Number(env.TFV_PARALLELISM || 4)),
-    prParallelism: env.TFV_PR_PARALLELISM ? Math.max(1, Number(env.TFV_PR_PARALLELISM)) : undefined,
-    runTimeoutMs: Math.max(60, Number(env.TFV_RUN_TIMEOUT_SECONDS || 3600)) * 1000,
+    parallelism: Math.max(1, Number(env.TERIAC_PARALLELISM || 4)),
+    prParallelism: env.TERIAC_PR_PARALLELISM ? Math.max(1, Number(env.TERIAC_PR_PARALLELISM)) : undefined,
+    runTimeoutMs: Math.max(60, Number(env.TERIAC_RUN_TIMEOUT_SECONDS || 3600)) * 1000,
     commandNames,
-    defaultVersion: env.TFV_DEFAULT_VERSION || 'latest',
-    requireApplyProject: env.TFV_REQUIRE_APPLY_PROJECT === 'true',
-    ackReaction: parseReaction(env.TFV_ACK_REACTION, 'TFV_ACK_REACTION') ?? 'eyes',
-    progressReply: env.TFV_PROGRESS_REPLY === 'true',
-    commentMode: parseCommentMode(env.TFV_COMMENT_MODE, 'TFV_COMMENT_MODE') ?? 'new',
+    defaultVersion: env.TERIAC_DEFAULT_VERSION || 'latest',
+    requireApplyProject: env.TERIAC_REQUIRE_APPLY_PROJECT === 'true',
+    ackReaction: parseReaction(env.TERIAC_ACK_REACTION, 'TERIAC_ACK_REACTION') ?? 'eyes',
+    progressReply: env.TERIAC_PROGRESS_REPLY === 'true',
+    commentMode: parseCommentMode(env.TERIAC_COMMENT_MODE, 'TERIAC_COMMENT_MODE') ?? 'new',
     spinnerUrl: spinnerUrlFor(publicUrl),
     github,
     repos,

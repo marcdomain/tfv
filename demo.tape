@@ -1,4 +1,4 @@
-# tfv — demo tape
+# teriac — demo tape
 # Run with: vhs demo.tape
 
 Output demo.gif
@@ -17,7 +17,7 @@ Set PlaybackSpeed 1
 # 1. HELP
 # ══════════════════════════════════════════════════════════════════════════════
 Sleep 500ms
-Type "tfv --help"
+Type "teriac --help"
 Enter
 Sleep 3s
 
@@ -26,29 +26,29 @@ Sleep 3s
 # ══════════════════════════════════════════════════════════════════════════════
 
 # Install latest stable
-Type "tfv install latest"
+Type "teriac install latest"
 Enter
 Sleep 5s
 
 # Install a specific version
-Type "tfv install 1.8.5"
+Type "teriac install 1.8.5"
 Enter
 Sleep 5s
 
 # Install an older version using ^ (latest patch in series)
-Type "tfv install 1.7.^"
+Type "teriac install 1.7.^"
 Enter
 Sleep 5s
 
 # Install 1.6.x series
-Type "tfv install 1.6.^"
+Type "teriac install 1.6.^"
 Enter
 Sleep 5s
 
 # ══════════════════════════════════════════════════════════════════════════════
 # 3. LIST INSTALLED VERSIONS
 # ══════════════════════════════════════════════════════════════════════════════
-Type "tfv list"
+Type "teriac list"
 Enter
 Sleep 2s
 
@@ -56,28 +56,28 @@ Sleep 2s
 # 4. SWITCH BETWEEN VERSIONS — show terraform version changes
 # ══════════════════════════════════════════════════════════════════════════════
 
-Type "tfv use 1.6.7"
+Type "teriac use 1.6.6"
 Enter
 Sleep 1500ms
 Type "terraform version"
 Enter
 Sleep 1500ms
 
-Type "tfv use 1.7.5"
+Type "teriac use 1.7.5"
 Enter
 Sleep 1500ms
 Type "terraform version"
 Enter
 Sleep 1500ms
 
-Type "tfv use 1.8.5"
+Type "teriac use 1.8.5"
 Enter
 Sleep 1500ms
 Type "terraform version"
 Enter
 Sleep 1500ms
 
-Type "tfv use latest"
+Type "teriac use latest"
 Enter
 Sleep 1500ms
 Type "terraform version"
@@ -87,7 +87,7 @@ Sleep 2s
 # ══════════════════════════════════════════════════════════════════════════════
 # 5. CURRENT — active version + PATH status
 # ══════════════════════════════════════════════════════════════════════════════
-Type "tfv current"
+Type "teriac current"
 Enter
 Sleep 2s
 
@@ -95,7 +95,7 @@ Sleep 2s
 # 6. AUTO-SWITCH — reads required_version from .tf file
 # ══════════════════════════════════════════════════════════════════════════════
 Hide
-Type "mkdir -p /tmp/tfv-demo-tf && printf 'terraform { required_version = \\042~> 1.7\\042 }\\n' > /tmp/tfv-demo-tf/versions.tf && cd /tmp/tfv-demo-tf"
+Type "mkdir -p /tmp/teriac-demo-tf && printf 'terraform { required_version = \\042~> 1.7\\042 }\\n' > /tmp/teriac-demo-tf/versions.tf && cd /tmp/teriac-demo-tf"
 Enter
 Sleep 500ms
 Type "clear"
@@ -103,7 +103,7 @@ Enter
 Sleep 200ms
 Show
 
-Type "tfv auto-switch"
+Type "teriac auto-switch"
 Enter
 Sleep 2s
 
@@ -122,7 +122,7 @@ Show
 
 # AUTO-SWITCH from .terraform-version file
 Hide
-Type "mkdir -p /tmp/tfv-demo-pin && echo '1.6.7' > /tmp/tfv-demo-pin/.terraform-version && cd /tmp/tfv-demo-pin"
+Type "mkdir -p /tmp/teriac-demo-pin && echo '1.6.6' > /tmp/teriac-demo-pin/.terraform-version && cd /tmp/teriac-demo-pin"
 Enter
 Sleep 500ms
 Type "clear"
@@ -130,7 +130,7 @@ Enter
 Sleep 200ms
 Show
 
-Type "tfv auto-switch"
+Type "teriac auto-switch"
 Enter
 Sleep 2s
 
@@ -151,7 +151,7 @@ Show
 # 7. PIN — lock version for teammates
 # ══════════════════════════════════════════════════════════════════════════════
 Hide
-Type "tfv use latest"
+Type "teriac use latest"
 Enter
 Sleep 500ms
 Type "clear"
@@ -159,7 +159,7 @@ Enter
 Sleep 200ms
 Show
 
-Type "tfv pin"
+Type "teriac pin"
 Enter
 Sleep 500ms
 
@@ -170,11 +170,11 @@ Sleep 1500ms
 # ══════════════════════════════════════════════════════════════════════════════
 # 8. UPGRADE — latest patch in current series
 # ══════════════════════════════════════════════════════════════════════════════
-Type "tfv use 1.8.5"
+Type "teriac use 1.8.5"
 Enter
 Sleep 1000ms
 
-Type "tfv upgrade"
+Type "teriac upgrade"
 Enter
 Sleep 5s
 
@@ -185,11 +185,11 @@ Sleep 2s
 # ══════════════════════════════════════════════════════════════════════════════
 # 9. REMOVE versions
 # ══════════════════════════════════════════════════════════════════════════════
-Type "tfv remove 1.6.7"
+Type "teriac remove 1.6.6"
 Enter
 Sleep 1s
 
-Type "tfv list"
+Type "teriac list"
 Enter
 Sleep 2s
 
@@ -198,20 +198,20 @@ Sleep 2s
 # ══════════════════════════════════════════════════════════════════════════════
 
 # No --provider needed for terraform (it's the default)
-Type "tfv list"
+Type "teriac list"
 Enter
 Sleep 1500ms
 
 # Add --provider tofu to target OpenTofu instead
-Type "tfv install latest --provider tofu"
+Type "teriac install latest --provider tofu"
 Enter
 Sleep 5s
 
-Type "tfv use latest --provider tofu"
+Type "teriac use latest --provider tofu"
 Enter
 Sleep 1500ms
 
-Type "tfv current --provider tofu"
+Type "teriac current --provider tofu"
 Enter
 Sleep 1500ms
 
@@ -220,7 +220,7 @@ Enter
 Sleep 2s
 
 # List available remote OpenTofu versions
-Type "tfv list --remote --provider tofu"
+Type "teriac list --remote --provider tofu"
 Enter
 Sleep 4s
 
