@@ -7,8 +7,8 @@
       | |_ |  __/| |   | || (_| || (__
        \__| \___||_|   |_| \__,_| \___|
 
-        Happy terraforming! 😍🥂
-    ---------------------------------
+          Happy terraforming! 😍🥂
+      ---------------------------------
 ```
 
 `teriac` lets you install, switch, and manage multiple versions of **Terraform**, **OpenTofu** and **Terragrunt** without `sudo`. All binaries live in `~/.teriac/` — upgrading `teriac` itself never wipes your installed versions.
@@ -21,7 +21,7 @@
 ## Installation
 
 ```sh
-npm install -g teriac
+npm install -g @marcdomain/teriac
 ```
 
 `teriac` automatically adds `~/.teriac/bin` to your PATH on install (shell configs, fish `conf.d`, or Windows User PATH). Restart your terminal once after install.
@@ -33,7 +33,7 @@ If your package manager skips install scripts (pnpm 10, Bun, Yarn Berry, `--igno
 ## How it works
 
 ```text
-npm install -g teriac
+npm install -g @marcdomain/teriac
        │
        ▼
 postInstall.js  (or first `teriac` run, if install scripts were skipped)
