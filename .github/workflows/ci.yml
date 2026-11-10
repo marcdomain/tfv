@@ -25,7 +25,6 @@ jobs:
           node-version: ${{ matrix.node }}
           cache: 'npm'
 
-      # Skip our own postinstall here; the smoke test below runs it on purpose.
       - run: npm ci --ignore-scripts
 
       - run: npm test
@@ -33,7 +32,8 @@ jobs:
       - name: Smoke test install setup and CLI
         shell: bash
         run: |
-          node lib/utils/postInstall.js
+          # The first run sets up ~/.teriac (there is no install script).
+          node index.js --version
           test -f "$HOME/.teriac/.setup"
           node index.js --help > /dev/null
           node index.js auto-switch --help > /dev/null

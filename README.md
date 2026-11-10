@@ -24,9 +24,9 @@
 npm install -g @marcdomain/teriac
 ```
 
-`teriac` automatically adds `~/.teriac/bin` to your PATH on install (shell configs, fish `conf.d`, or Windows User PATH). Restart your terminal once after install.
+The first time you run `teriac`, it creates `~/.teriac` and adds `~/.teriac/bin` to your PATH (shell configs, fish `conf.d`, or Windows User PATH). Restart your terminal once after that.
 
-If your package manager skips install scripts (pnpm 10, Bun, Yarn Berry, `--ignore-scripts`) or you installed with `sudo`, the same setup runs automatically the first time you run `teriac`.
+teriac has no install script, so it works the same with npm, pnpm, Bun and Yarn, and npm never asks you to allow scripts.
 
 ---
 
@@ -36,7 +36,7 @@ If your package manager skips install scripts (pnpm 10, Bun, Yarn Berry, `--igno
 npm install -g @marcdomain/teriac
        │
        ▼
-postInstall.js  (or first `teriac` run, if install scripts were skipped)
+first `teriac` run (and after each upgrade)
   ├── creates ~/.teriac/bin/, ~/.teriac/store/, ~/.teriac/cache/
   └── adds ~/.teriac/bin to PATH (shell configs / Windows registry)
        │

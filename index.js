@@ -3,7 +3,7 @@
 const yargs = require('yargs')
 const {join} = require('path')
 
-// Finish setup here if the postinstall script never ran.
+// First run (and after an upgrade): create ~/.teriac, put its bin on PATH, show the banner.
 require('./lib/utils/setup').ensureSetup()
 
 // `teriac`, `teriac --help`: a grouped table of commands. Per-command help stays with yargs.
