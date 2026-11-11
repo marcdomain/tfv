@@ -2,8 +2,8 @@ apiVersion: v2
 name: teriac-server
 description: Pull request automation for Terraform, OpenTofu and Terragrunt, with per-project RBAC, approvers and drift alerts
 type: application
-version: 0.1.1
-appVersion: "0.1.1"
+version: 0.2.0
+appVersion: "0.2.0"
 kubeVersion: ">=1.27.0-0"
 home: https://github.com/marcdomain/teriac
 sources:

@@ -1,15 +1,16 @@
 // Handles platform events: autoplan on push, comment commands, the Apply
 // button, and cleanup when a PR closes.
 import { join } from 'node:path';
+import { createHash } from 'node:crypto';
 import { rmSync, mkdirSync, readFileSync, existsSync } from 'node:fs';
 import type { ServerConfig, RepoPolicy, Action } from './config.ts';
-import type { VcsAdapter, VcsEvent, Repo, PullRequestState } from './vcs/types.ts';
-import { Store, type Run } from './store.ts';
+import type { VcsAdapter, VcsEvent, Repo, PullRequestState, Comparison, Annotation } from './vcs/types.ts';
+import { Store, type Run, type Grant } from './store.ts';
 import { parseCommand, helpText, toolArgs, TOOL_ACTION, EDITS_STATE, type Command } from './commands.ts';
 import { loadRepoConfig, loadRepoConfigFrom, emptyRepoConfig, type RepoConfig } from './repoConfig.ts';
 import { discoverProjects, affectedProjects, terragruntDependencies, mockedDependencies, unappliedDependencies, type Project } from './discovery.ts';
 import {
-  repoPolicyFor, rulesFor, checkPermission, currentApprovers, applyBlockers, matchesPrincipal, type Lookup, type EffectiveRules,
+  repoPolicyFor, rulesFor, checkPermission, applyBlockers, matchesPrincipal, type Lookup, type EffectiveRules,
 } from './policy.ts';
 import { renderComment, renderCheck, renderApplyReport, parseApplyResult, providersOf, cmdBlock, fence, tail, type ProjectView, type CommentLinks } from './render.ts';
 import { repoLinks, platformForHost } from './links.ts';
@@ -20,6 +21,15 @@ import { log } from './log.ts';
 import { evaluateRules, runCommands, stricter, type PolicyConfig, type PolicyResult } from './policies.ts';
 import { matchGlob } from './glob.ts';
 import { metrics } from './metrics.ts';
+import { scanSecrets, secretNote } from './secrets.ts';
+import { securityFindings } from './security-rules.ts';
+import { assessRisk, extraApprovalFor, type Risk } from './risk.ts';
+import { activeFreezes, protectedHits } from './freeze.ts';
+import { changeFingerprint, countApprovals, staleFor, staleText } from './safety.ts';
+import { stricterMode, DEFAULT_SIZE_LIMITS, type StaleBaseMode, type SecretScanMode, type RiskConfig, type FreezeConfig, type ProtectedConfig, type SecretPattern } from './safety-config.ts';
+import { locate } from './blame.ts';
+import { notifyText } from './notify.ts';
+import type { PlanSummary } from './render.ts';
 
 export const MARKER = '<!-- teriac:summary -->';
 
@@ -165,9 +175,56 @@ interface PrContext {
   warnings: string[];
   lookup: Lookup;
   summaryUrl?: string | null;     // the summary comment, for links from replies
+  // Per-request caches for the platform's compare view.
+  fingerprints?: Map<string, Promise<string | null>>;
+  baseChanges?: Promise<Comparison | null>;
+  carried?: string[];             // approvals kept across a rebase (for the comment)
 }
 
+// The safety settings in force for a PR: server and repo (repos.yaml), tightened by teriac.yaml.
+interface Safety {
+  reapproveOnChange: boolean;
+  keepOnRebase: boolean;
+  staleBase: StaleBaseMode;
+  verifyPlan: boolean;
+  secretMode: SecretScanMode;
+  secretPatterns: SecretPattern[];
+  risk?: RiskConfig;
+  freezes: FreezeConfig;
+  protected: ProtectedConfig;
+}
+
+
+
 const slug = (s: string) => s.replace(/[^A-Za-z0-9._-]+/g, '_');
+const sha256File = (file: string) => createHash('sha256').update(readFileSync(file)).digest('hex');
+// The lowest limit set (server or repo), else the default; medium always stays below high.
+const sizeLimits = (...sets: ({ medium?: number; high?: number } | undefined)[]) => {
+  const pick = (k: 'medium' | 'high') => {
+    const set = sets.map(s => s?.[k]).filter((n): n is number => n !== undefined);
+    return set.length ? Math.min(...set) : DEFAULT_SIZE_LIMITS[k];
+  };
+  const high = pick('high');
+  return { medium: Math.min(pick('medium'), high - 1), high };
+};
+// Who may override, in words, with links: "[marcdomain](profile)", "team [sre](team page)",
+// "people with maintain access".
+const overriders = (who: string[], repo: Repo) => {
+  const names = who.map(p => {
+    if (p.startsWith('user:')) {
+      const login = p.slice(5);
+      return repo.platform === 'github' ? `[${login}](https://${repo.host}/${encodeURIComponent(login)})` : login;
+    }
+    if (p.startsWith('team:')) {
+      const t = p.slice(5);
+      const [org, slug] = t.includes('/') ? t.split('/') : [repo.owner, t];
+      return repo.platform === 'github' ? `team [${slug}](https://${repo.host}/orgs/${encodeURIComponent(org)}/teams/${encodeURIComponent(slug)})` : `team ${t}`;
+    }
+    return p === 'codeowners' ? 'the code owners' : p === 'anyone' ? 'anyone' : `people with ${p} access`;
+  });
+  return names.length > 1 ? `${names.slice(0, -1).join(', ')} or ${names.at(-1)}` : names[0];
+};
+const summaryOf = (run: Run | undefined): PlanSummary | null => (run?.summary ? JSON.parse(run.summary) as PlanSummary : null);
 
 export class App {
   private queue = new KeyedQueue();
@@ -330,12 +387,110 @@ export class App {
   }
 
   private async allowed(ctx: PrContext, action: Action, user: string, project: Project) {
-    const decision = await checkPermission(action, user, project, this.rules(ctx, project), ctx.lookup);
+    let decision = await checkPermission(action, user, project, this.rules(ctx, project), ctx.lookup);
+    // Emergency access: a time-limited grant from the dashboard covers this action.
+    if (!decision.allowed) {
+      const grant = this.grantFor(ctx, user, project, action);
+      if (grant) {
+        decision = { allowed: true, reason: `emergency access #${grant.id} from ${grant.grantedBy} (until ${grant.expiresAt}): ${grant.reason}` };
+        this.useGrant(grant, ctx, project, action);
+      }
+    }
     this.deps.store.audit({
       repo: ctx.repoKey, pr: ctx.pr.number, user, action, project: project.name,
       allowed: decision.allowed, reason: decision.reason,
     });
     return decision;
+  }
+
+  // ---- safety settings and checks ----
+
+  private safety(ctx: PrContext): Safety {
+    const { config } = this.deps;
+    const p = ctx.policy;
+    const rc = p.allow_repo_config === false ? null : ctx.rulesConfig;
+    return {
+      reapproveOnChange: (p.reapprove_on_change ?? true) || rc?.reapprove_on_change === true,
+      keepOnRebase: (p.keep_approval_on_rebase ?? false) && rc?.keep_approval_on_rebase !== false,
+      staleBase: stricterMode(p.stale_base ?? 'warn', rc?.stale_base, 'warn'),
+      verifyPlan: p.verify_plan !== false,
+      secretMode: stricterMode(config.secretScan?.mode ?? 'redact', p.secret_scan, 'redact'),
+      secretPatterns: config.secretScan?.patterns ?? [],
+      risk: p.risk || config.risk ? {
+        production: p.risk?.production ?? config.risk?.production,
+        extra_approval: { ...config.risk?.extra_approval, ...p.risk?.extra_approval },
+        // A repo adds stateful types and can lower the size limits, never raise them.
+        stateful_types: [...(config.risk?.stateful_types ?? []), ...(p.risk?.stateful_types ?? [])],
+        size_limits: sizeLimits(config.risk?.size_limits, p.risk?.size_limits),
+      } : undefined,
+      // Server-wide and per-repo entries add up; each carries its own override list.
+      freezes: [...(config.freezes ?? []), ...(p.freezes ?? [])],
+      protected: [...(config.protected ?? []), ...(p.protected ?? [])],
+    };
+  }
+
+  // The PR's own changes at `sha`, fingerprinted (see safety.ts). Cached per request.
+  private fingerprint(ctx: PrContext, sha: string): Promise<string | null> {
+    ctx.fingerprints ??= new Map();
+    let f = ctx.fingerprints.get(sha);
+    if (!f) {
+      f = ctx.adapter.compare
+        ? ctx.adapter.compare(ctx.repo, ctx.pr.baseRef, sha).then(changeFingerprint).catch(err => { log.warn('compare failed', { err: (err as Error).message }); return null; })
+        : Promise.resolve(null);
+      ctx.fingerprints.set(sha, f);
+    }
+    return f;
+  }
+
+  // Commits on the base branch since this branch left it (cached per request).
+  private baseChanges(ctx: PrContext): Promise<Comparison | null> {
+    ctx.baseChanges ??= ctx.adapter.compare
+      ? ctx.adapter.compare(ctx.repo, ctx.pr.headSha, ctx.pr.baseRef).catch(err => { log.warn('compare failed', { err: (err as Error).message }); return null; })
+      : Promise.resolve(null);
+    return ctx.baseChanges;
+  }
+
+  // "main has 2 newer commits touching this project", or null.
+  private async stale(ctx: PrContext, project: Project): Promise<string | null> {
+    const mode = this.safety(ctx).staleBase;
+    if (mode === 'off') return null;
+    const commits = staleFor(project, ctx.projects, await this.baseChanges(ctx));
+    return commits ? staleText(commits, ctx.pr.baseRef, project.name, mode === 'block') : null;
+  }
+
+  // An unexpired grant for `user` on this project (for `action`, or any action).
+  private grantFor(ctx: PrContext, user: string, project: Project, action?: string): Grant | null {
+    return this.deps.store.activeGrants().find(g =>
+      g.user.toLowerCase() === user.toLowerCase()
+      && (g.repo === '*' || matchGlob(g.repo, ctx.repoKey))
+      && (!g.projects.length || g.projects.some(x => matchGlob(x, project.name) || matchGlob(x, project.dir)))
+      && (!action || g.actions.includes(action))) ?? null;
+  }
+
+  private useGrant(grant: Grant, ctx: PrContext, project: Project, action: string) {
+    const first = !grant.usedAt;
+    this.deps.store.markGrantUsed(grant.id);
+    if (!first) return;
+    const notify = this.deps.config.breakGlass?.notify ?? [];
+    if (!notify.length) return;
+    void notifyText(notify, this.deps.config.channels, {
+      title: `🚨 Emergency access #${grant.id} used by ${grant.user}`,
+      lines: [`${action} on \`${project.name}\` in ${ctx.repo.fullName} PR #${ctx.pr.number}`, `Granted by ${grant.grantedBy}: ${grant.reason}`, `Expires ${grant.expiresAt}`],
+      event: 'teriac.break_glass.used', data: { grant, project: project.name, pr: ctx.pr.number, action },
+    }, { people: this.deps.config.people, env: this.deps.env ?? process.env });
+  }
+
+  // Hides possible secrets in tool output; "fail" mode also refuses to keep the run.
+  private scan(ctx: PrContext, text: string): { text: string; found: string[]; fail: boolean } {
+    const s = this.safety(ctx);
+    if (s.secretMode === 'off') return { text, found: [], fail: false };
+    const r = scanSecrets(text, s.secretPatterns);
+    return { ...r, fail: s.secretMode === 'fail' && r.found.length > 0 };
+  }
+
+  private auditSecrets(ctx: PrContext, user: string, project: Project, found: string[], what: string) {
+    if (!found.length) return;
+    this.deps.store.audit({ repo: ctx.repoKey, pr: ctx.pr.number, user, action: 'secret_found', project: project.name, allowed: false, reason: `possible secrets hidden from ${what} output: ${found.join(', ')}` });
   }
 
   // ---- events ----
@@ -484,6 +639,10 @@ export class App {
       // the project's approvals and PR requirements.
       if (!ctx.pr.open) return reply.say('❌ This PR is closed.');
       const blockers = await applyBlockers(project, this.rules(ctx, project), ctx.pr, await this.approvers(ctx), ctx.lookup);
+      const grant = this.grantFor(ctx, user, project);
+      if (!grant?.bypass.includes('freeze')) {
+        for (const f of activeFreezes(this.safety(ctx).freezes, project)) blockers.push(`change freeze \`${f.name}\` is on until ${f.until}`);
+      }
       if (blockers.length) {
         this.deps.store.audit({ repo: ctx.repoKey, pr: ctx.pr.number, user, action, project: project.name, allowed: false, reason: `blocked: ${blockers.join('; ')}` });
         return reply.say(`🔒 \`${text}\` needs ${blockers.join('; ')}`);
@@ -495,12 +654,17 @@ export class App {
       if (!lock.ok) return reply.say(`🔒 \`${project.name}\` is locked by #${lock.heldBy.pr} (${lock.heldBy.user}); apply or unlock it there first.`);
     }
 
-    const r = await this.sched.use(`${ctx.repoKey}#${ctx.pr.number}`, async () => {
+    const raw = await this.sched.use(`${ctx.repoKey}#${ctx.pr.number}`, async () => {
       const tools = await this.tools(ctx, project);
       return runTool({
         root: ctx.root, project, tools, planPath: this.planPath(ctx, project), env: this.env(ctx, project, user), timeoutMs: this.deps.config.runTimeoutMs,
       }, toolArgs(cmd));
     });
+    // `state show` and `output` print values: hide anything that looks like a secret.
+    const scanned = this.scan(ctx, raw.output);
+    this.auditSecrets(ctx, user, project, scanned.found, tool);
+    const r = { ...raw, output: scanned.fail ? `Output withheld: it contains something that looks like a secret (${scanned.found.join(', ')}).` : scanned.text };
+    if (scanned.found.length && !scanned.fail) reply.say(secretNote(scanned.found));
     this.deps.store.audit({
       repo: ctx.repoKey, pr: ctx.pr.number, user, action: tool, project: project.name, allowed: true,
       reason: `${r.ok ? 'ran' : 'failed'}: ${text}`,
@@ -603,6 +767,7 @@ export class App {
           mode: pol.mode,
           findings: [
             ...evaluateRules(r.plan, pol.rules ?? [], project),
+            ...(pol.builtin?.includes('security') ? securityFindings(r.plan, pol.disable ?? []) : []),
             ...(r.planJsonPath ? await runCommands(pol.commands ?? [], r.planJsonPath, cwd, this.env(ctx, project, user), project) : []),
           ],
         };
@@ -618,10 +783,22 @@ export class App {
       }
       const lock = join(ctx.root, project.dir, '.terraform.lock.hcl');
       const providers = providersOf(existsSync(lock) ? readFileSync(lock, 'utf-8') : null, r.plan);
+      // Possible secrets never leave the server. In "fail" mode the plan can't be applied.
+      const scanned = this.scan(ctx, r.output);
+      this.auditSecrets(ctx, user, project, scanned.found, 'plan');
+      const ok = r.ok && !scanned.fail;
+      const output = scanned.fail
+        ? `teriac withheld this plan's output: it contains something that looks like a secret (${scanned.found.join(', ')}). `
+          + 'Find where it comes from (a variable, a tag, an output), remove it, and plan again.'
+        : scanned.text;
+      const risk = ok ? assessRisk(r.summary, project, policy?.findings ?? [], this.safety(ctx).risk) : null;
       store.finishRun(runId, {
-        status: r.ok ? 'success' : 'failed', engine, summary: r.summary ? JSON.stringify(r.summary) : null,
-        output: r.output, planPath: r.ok ? planPath : null, hasChanges: r.hasChanges, destroys,
+        status: ok ? 'success' : 'failed', engine, summary: r.summary ? JSON.stringify(r.summary) : null,
+        output, planPath: ok ? planPath : null, hasChanges: r.hasChanges, destroys,
         policy: policy ? JSON.stringify(policy) : null, mocks, providers, usage: r.usage ?? null,
+        // The plan file's fingerprint: apply refuses a file that changed since it was reviewed.
+        planSha: ok && existsSync(planPath) ? sha256File(planPath) : null,
+        risk, secrets: scanned.found,
       });
       if (policy?.findings.length) store.saveFindings(store.getRun(runId)!, policy.mode, policy.findings);
     } catch (err) {
@@ -642,6 +819,9 @@ export class App {
       override: repo.override ?? server.override ?? [],
       rules: [...(server.rules ?? []), ...(repo.rules ?? [])],
       commands: [...(server.commands ?? []), ...(repo.commands ?? [])],
+      // A repo can add rule packs; only the server can turn single rules off.
+      builtin: [...new Set([...(server.builtin ?? []), ...(repo.builtin ?? [])])],
+      disable: server.disable ?? [],
     };
   }
 
@@ -674,12 +854,72 @@ export class App {
     return newer.length ? [`${list(newer)} applied after this plan: re-plan this project first (\`${name} plan -p ${project.name}\`)`] : [];
   }
 
-  private async blockers(ctx: PrContext, project: Project, plan: Run, approvers: string[], override = false): Promise<string[]> {
-    const out = [...this.dependencyBlockers(ctx, project, plan), ...await applyBlockers(project, this.rules(ctx, project), ctx.pr, approvers, ctx.lookup)];
+  // Everything that stops this plan's apply right now. With `override` (the applier typed
+  // --override), each freeze, protected resource and policy is skipped when the applier is in
+  // its own override list; `skipped` collects what was. An emergency grant may skip more.
+  private async blockers(ctx: PrContext, project: Project, plan: Run, approvers: string[], opts: { override?: boolean; user?: string; skipped?: string[] } = {}): Promise<string[]> {
+    const s = this.safety(ctx);
+    const grant = opts.user ? this.grantFor(ctx, opts.user, project) : null;
+    const skip = new Set<string>(grant?.bypass ?? []);
+    const mayOverride = async (who: string[]) => {
+      if (!opts.override || !opts.user) return false;
+      for (const p of who) if (await matchesPrincipal(p, opts.user, project, ctx.lookup)) return true;
+      return false;
+    };
+    const by = (who: string[]) => (who.length ? ` · ${overriders(who, ctx.repo)} can apply with \`--override\`` : '');
+    const rules = this.rules(ctx, project);
+    const out = [...this.dependencyBlockers(ctx, project, plan)];
+    if (skip.has('approvals')) {
+      // An emergency grant can skip approvals, never the PR's other requirements.
+      const noApprovals: EffectiveRules = {
+        server: rules.server ? { ...rules.server, approvals: [] } : null,
+        repo: rules.repo.map(r => ({ ...r, approvals: [] })),
+        requirements: rules.requirements.filter(r => r !== 'approved'),
+      };
+      out.push(...await applyBlockers(project, noApprovals, ctx.pr, approvers, ctx.lookup));
+    } else {
+      out.push(...await applyBlockers(project, rules, ctx.pr, approvers, ctx.lookup));
+      // High-risk plans can need one more approval from a named group.
+      const extra = plan.risk ? extraApprovalFor(plan.risk.level as Risk['level'], s.risk) : null;
+      if (extra) {
+        let have = 0;
+        for (const u of approvers) if (await matchesPrincipal(extra.from, u, project, ctx.lookup)) have++;
+        if (have < extra.count) {
+          const n = extra.count - have;
+          out.push(`${n} more approval${n > 1 ? 's' : ''} from ${extra.from === 'anyone' ? 'a reviewer' : extra.from} (${plan.risk!.level} risk)`);
+        }
+      }
+    }
+    if (s.staleBase === 'block') {
+      const stale = await this.stale(ctx, project);
+      if (stale) out.push(stale);
+    }
+    if (!skip.has('freeze')) {
+      for (const f of activeFreezes(s.freezes, project)) {
+        if (await mayOverride(f.override)) { opts.skipped?.push(`change freeze ${f.name}`); continue; }
+        out.push(`change freeze \`${f.name}\` is on until ${f.until}${by(f.override)}`);
+      }
+    }
+    if (!skip.has('protected')) {
+      const blocked = new Map<string, string[]>();
+      for (const h of protectedHits(s.protected, project, summaryOf(plan))) {
+        if (await mayOverride(h.override)) { opts.skipped?.push(`protected ${h.address}`); continue; }
+        blocked.set(h.address, [...new Set([...(blocked.get(h.address) ?? []), ...h.override])]);
+      }
+      const list = [...blocked.keys()];
+      if (list.length) {
+        const who = [...new Set([...blocked.values()].flat())];
+        out.push(`protected resource${list.length === 1 ? '' : 's'} would be destroyed or replaced: ${list.slice(0, 3).map(h => `\`${h}\``).join(', ')}${list.length > 3 ? ', …' : ''}${by(who)}`);
+      }
+    }
     const pol = this.policyOf(plan);
-    if (!override && pol?.mode === 'enforce' && pol.findings.length) {
-      const rules = [...new Set(pol.findings.map(f => f.rule))];
-      out.push(`${pol.findings.length} policy finding${pol.findings.length === 1 ? '' : 's'} (${rules.slice(0, 3).join(', ')}${rules.length > 3 ? ', …' : ''})`);
+    if (!skip.has('policy') && pol?.mode === 'enforce' && pol.findings.length) {
+      const who = this.policyFor(ctx, project).override ?? [];
+      if (await mayOverride(who)) opts.skipped?.push('policy findings');
+      else {
+        const names = [...new Set(pol.findings.map(f => f.rule))];
+        out.push(`${pol.findings.length} policy finding${pol.findings.length === 1 ? '' : 's'} (${names.slice(0, 3).join(', ')}${names.length > 3 ? ', …' : ''})${by(who)}`);
+      }
     }
     return out;
   }
@@ -687,7 +927,11 @@ export class App {
   // ---- apply ----
 
   private async approvers(ctx: PrContext) {
-    return currentApprovers(await ctx.adapter.reviews(ctx.repo, ctx.pr.number), ctx.pr.author, ctx.pr.headSha);
+    const s = this.safety(ctx);
+    const a = await countApprovals(await ctx.adapter.reviews(ctx.repo, ctx.pr.number), ctx.pr.author, ctx.pr.headSha,
+      { reapproveOnChange: s.reapproveOnChange, keepOnRebase: s.keepOnRebase }, sha => this.fingerprint(ctx, sha));
+    ctx.carried = a.carried;
+    return a.approvers;
   }
 
   // Groups projects into waves: each wave only depends on earlier waves.
@@ -758,6 +1002,7 @@ export class App {
     const denied: string[] = [];
     const attempted = new Set<string>();
     const approved: { project: Project; plan: Run }[] = [];
+    const staleNotes: string[] = [];
     for (const project of this.ordered(selected)) {
       const plan = plans.get(`${project.name}::${project.workspace}`);
       if (!plan || plan.status !== 'success' || !plan.planPath) {
@@ -784,26 +1029,25 @@ export class App {
         continue;
       }
 
-      let override = false;
+      // --override: each freeze, protected resource and policy checks its own override list.
+      const skipped: string[] = [];
+      const blockers = await this.blockers(ctx, project, plan, approvers, { override: cmd.override, user, skipped });
       if (cmd.override) {
-        const who = this.policyFor(ctx, project).override ?? [];
-        for (const p of who) if (await matchesPrincipal(p, user, project, ctx.lookup)) { override = true; break; }
         this.deps.store.audit({
-          repo: ctx.repoKey, pr: ctx.pr.number, user, action: 'override', project: project.name, allowed: override,
-          reason: override ? 'applied despite enforced policy findings' : `--override needs ${who.join(' or ') || 'an override list in repos.yaml'}`,
+          repo: ctx.repoKey, pr: ctx.pr.number, user, action: 'override', project: project.name, allowed: skipped.length > 0,
+          reason: skipped.length ? `--override skipped: ${skipped.join('; ')}` : '--override: nothing this person may override',
         });
-        if (!override) {
-          denied.push(`- \`${project.name}\`: \`--override\` needs ${who.join(' or ') || 'an `override` list under policies in repos.yaml'}`);
-          continue;
-        }
       }
-
-      const blockers = await this.blockers(ctx, project, plan, approvers, override);
       if (blockers.length) {
         denied.push(`- \`${project.name}\`: ${blockers.join('; ')}`);
         continue;
       }
       approved.push({ project, plan });
+      // Out of date (warn mode): applied, with a heads-up in the reply.
+      if (this.safety(ctx).staleBase === 'warn') {
+        const stale = await this.stale(ctx, project);
+        if (stale) staleNotes.push(`⚠️ ${stale}.`);
+      }
     }
 
     // Apply in dependency waves: a project starts once everything it depends on
@@ -878,6 +1122,7 @@ export class App {
       // Units re-planned with new dependency outputs: their (new) plan, to review.
       if (replanned.length) await this.refreshComment(ctx, new Map(), new Set(replanned), reply);
     }
+    for (const n of staleNotes) reply.say(n);
     if (denied.length) reply.say(`**Not applied:**\n${denied.join('\n')}`);
     for (const [project, note] of notes) reply.say(`- \`${project}\`: ${note}`);
 
@@ -900,11 +1145,25 @@ export class App {
     await this.check(ctx, { name: `teriac: ${project.name}`, headSha: ctx.pr.headSha, externalId: project.name, status: 'in_progress', title: 'Applying…', summary: `Applying \`${project.name}\` for @${user}` });
     let engine = plan.engine;
     try {
+      // Apply exactly what was reviewed: the plan file must be the one saved at plan time.
+      if (this.safety(ctx).verifyPlan && plan.planSha) {
+        const now = existsSync(plan.planPath!) ? sha256File(plan.planPath!) : null;
+        if (now !== plan.planSha) {
+          store.audit({ repo: ctx.repoKey, pr: ctx.pr.number, user, action: 'apply', project: project.name, allowed: false, reason: `plan file ${now ? 'changed' : 'missing'} since it was reviewed (run ${plan.id})` });
+          store.finishRun(runId, { status: 'failed', engine, output: `teriac refused to apply: the saved plan file ${now ? 'changed' : 'is missing'} since it was reviewed. Plan again (\`${config.commandNames[0]} plan -p ${project.name}\`), review it, then apply.` });
+          metrics.observeRun('apply', 'failed', Date.now() - started);
+          await this.publishCheck(ctx, project, store.getRun(runId)!);
+          return;
+        }
+      }
       const tools = await this.tools(ctx, project);
       engine = engineLabel(tools);
       const r = await runApply({ root: ctx.root, project, tools, planPath: plan.planPath!, env: this.env(ctx, project, user), timeoutMs: config.runTimeoutMs });
+      // The apply already happened, so "fail" mode can only hide the output here.
+      const scanned = this.scan(ctx, r.output);
+      this.auditSecrets(ctx, user, project, scanned.found, 'apply');
       // The counts are saved now, so the Metrics page never has to read logs.
-      store.finishRun(runId, { status: r.ok ? 'success' : 'failed', engine, output: r.output, summary: plan.summary, usage: r.usage ?? null, applied: parseApplyResult(r.output) });
+      store.finishRun(runId, { status: r.ok ? 'success' : 'failed', engine, output: scanned.text, summary: plan.summary, usage: r.usage ?? null, applied: parseApplyResult(r.output), secrets: scanned.found });
     } catch (err) {
       store.finishRun(runId, { status: 'failed', engine, output: `teriac could not apply this project: ${(err as Error).message}` });
     }
@@ -980,7 +1239,35 @@ export class App {
       conclusion: run.status === 'success' ? (canApply ? 'neutral' : 'success') : 'failure',
       title: out.title, summary: out.summary, text: out.text,
       actions: canApply ? [{ label: 'Apply', identifier: 'apply', description: `Apply ${project.name}`.slice(0, 40) }] : undefined,
+      annotations: run.kind === 'plan' && run.status === 'success' ? this.annotations(ctx, project, run) : undefined,
     });
+  }
+
+  // Notes on the code behind risky changes and policy findings, shown in the PR's
+  // "Files changed": destroys and replacements, protected resources, findings.
+  private annotations(ctx: PrContext, project: Project, run: Run): Annotation[] {
+    const s = summaryOf(run);
+    if (!s) return [];
+    const protectedSet = new Set(protectedHits(this.safety(ctx).protected, project, s).map(h => h.address));
+    const out = new Map<string, Annotation>();
+    const add = (address: string, level: Annotation['level'], title: string, message: string) => {
+      const loc = locate(ctx.root, project.dir, address);
+      if (!loc) return;
+      const key = `${loc.file}:${loc.start}:${title}`;
+      if (!out.has(key)) out.set(key, { path: loc.file, startLine: loc.start, endLine: loc.start, level, title, message });
+    };
+    for (const c of s.changes) {
+      if (c.action !== 'delete' && c.action !== 'replace') continue;
+      const verb = c.action === 'delete' ? 'destroyed' : 'replaced';
+      const prot = protectedSet.has(c.address);
+      add(c.address, prot ? 'failure' : 'warning', `${c.address} will be ${verb}${prot ? ' (protected)' : ''}`,
+        [c.reason ? `Replaced because ${c.reason} changed.` : '', prot ? 'This resource is protected: applying needs --override.' : '', run.risk ? `Plan risk: ${run.risk.level}.` : ''].filter(Boolean).join(' ') || `This plan ${c.action === 'delete' ? 'destroys' : 'replaces'} it.`);
+    }
+    for (const f of this.policyOf(run)?.findings ?? []) {
+      if (f.address === '(scanner)') continue;
+      add(f.address, f.severity === 'critical' || f.severity === 'high' ? 'failure' : 'warning', `Policy: ${f.rule}`, f.message);
+    }
+    return [...out.values()].slice(0, 50);
   }
 
   // Links and avatars for comments on this PR's platform.
@@ -1019,6 +1306,10 @@ export class App {
       if (plan.status === 'success' && plan.hasChanges) {
         view.blockers = await this.blockers(ctx, project, plan, approvers);
         if (this.twoPerson(ctx, project)) view.applyBy = `someone other than ${ctx.pr.author}`;
+        if (this.safety(ctx).staleBase === 'warn') {
+          const stale = await this.stale(ctx, project);
+          if (stale) view.warnings = [`${stale}.`];
+        }
       }
       views.push(view);
     }
@@ -1036,6 +1327,7 @@ export class App {
       dashboardUrl: config.publicUrl, limit: ctx.adapter.commentLimit, warnings: ctx.warnings,
       oneProjectPerApply: this.oneAtATime(ctx),
       approvers,
+      carried: ctx.carried,
       links: this.commentLinks(ctx),
     });
     if (asReply) {

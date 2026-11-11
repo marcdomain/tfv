@@ -42,6 +42,26 @@ export interface Run {
   providers: string[];        // e.g. "hashicorp/aws 5.70.0"
   usage: { cpuSeconds: number; peakMemory: number; peakProcesses: number } | null;
   applied: { added: number; changed: number; destroyed: number } | null;
+  planSha: string | null;     // sha256 of the plan file when it was made (applied only if unchanged)
+  risk: { level: string; reasons: string[] } | null;
+  secrets: string[];          // kinds of possible secrets found (and handled) in the output
+}
+
+// Emergency access: a time-limited permission given from the dashboard.
+export interface Grant {
+  id: number;
+  user: string;               // source-control login it's for
+  repo: string;               // glob on host/owner/name
+  projects: string[];         // globs on project name or dir
+  actions: string[];          // e.g. apply, apply_destroy, unlock
+  bypass: string[];           // blockers it skips: approvals, freeze, protected, policy
+  reason: string;
+  grantedBy: string;
+  createdAt: string;
+  expiresAt: string;
+  revokedAt: string | null;
+  revokedBy: string | null;
+  usedAt: string | null;
 }
 
 export interface RunQuery {
@@ -130,6 +150,12 @@ CREATE TABLE IF NOT EXISTS bot_comments (
 CREATE TABLE IF NOT EXISTS pr_comments (
   repo TEXT NOT NULL, pr INTEGER NOT NULL, kind TEXT NOT NULL, comment_id TEXT NOT NULL, PRIMARY KEY (repo, pr, kind)
 );
+CREATE TABLE IF NOT EXISTS grants (
+  id INTEGER PRIMARY KEY AUTOINCREMENT, user TEXT NOT NULL, repo TEXT NOT NULL, projects TEXT NOT NULL,
+  actions TEXT NOT NULL, bypass TEXT NOT NULL, reason TEXT NOT NULL, granted_by TEXT NOT NULL,
+  created_at TEXT NOT NULL, expires_at TEXT NOT NULL, revoked_at TEXT, revoked_by TEXT, used_at TEXT,
+  expiry_noted INTEGER NOT NULL DEFAULT 0
+);
 CREATE TABLE IF NOT EXISTS audit (
   id INTEGER PRIMARY KEY AUTOINCREMENT, at TEXT NOT NULL, repo TEXT NOT NULL, pr INTEGER NOT NULL,
   user TEXT NOT NULL, action TEXT NOT NULL, project TEXT NOT NULL, allowed INTEGER NOT NULL, reason TEXT NOT NULL
@@ -150,6 +176,15 @@ const toRun = (r: Record<string, any>): Run => ({
   providers: r.providers ? JSON.parse(r.providers) : [],
   usage: r.usage ? JSON.parse(r.usage) : null,
   applied: r.applied ? JSON.parse(r.applied) : null,
+  planSha: r.plan_sha ?? null,
+  risk: r.risk ? JSON.parse(r.risk) : null,
+  secrets: r.secrets ? JSON.parse(r.secrets) : [],
+});
+
+const toGrant = (r: Record<string, any>): Grant => ({
+  id: r.id, user: r.user, repo: r.repo, projects: JSON.parse(r.projects), actions: JSON.parse(r.actions), bypass: JSON.parse(r.bypass),
+  reason: r.reason, grantedBy: r.granted_by, createdAt: r.created_at, expiresAt: r.expires_at,
+  revokedAt: r.revoked_at ?? null, revokedBy: r.revoked_by ?? null, usedAt: r.used_at ?? null,
 });
 
 const toLock = (r: Record<string, any>): Lock => ({
@@ -176,6 +211,9 @@ export class Store {
     if (!cols.includes('providers')) this.db.exec('ALTER TABLE runs ADD COLUMN providers TEXT');
     if (!cols.includes('usage')) this.db.exec('ALTER TABLE runs ADD COLUMN usage TEXT');
     if (!cols.includes('applied')) this.db.exec('ALTER TABLE runs ADD COLUMN applied TEXT');
+    if (!cols.includes('plan_sha')) this.db.exec('ALTER TABLE runs ADD COLUMN plan_sha TEXT');
+    if (!cols.includes('risk')) this.db.exec('ALTER TABLE runs ADD COLUMN risk TEXT');
+    if (!cols.includes('secrets')) this.db.exec('ALTER TABLE runs ADD COLUMN secrets TEXT');
     // The Metrics page reads runs by start time.
     this.db.exec('CREATE INDEX IF NOT EXISTS runs_started ON runs (started_at)');
     this.db.exec('CREATE INDEX IF NOT EXISTS audit_at ON audit (at)');
@@ -230,10 +268,47 @@ export class Store {
     return Number(res.lastInsertRowid);
   }
 
-  finishRun(id: number, r: { status: RunStatus; engine?: string; summary?: string | null; output: string; planPath?: string | null; hasChanges?: boolean; destroys?: number; policy?: string | null; mocks?: string[]; providers?: string[]; usage?: object | null; applied?: object | null }): void {
+  finishRun(id: number, r: { status: RunStatus; engine?: string; summary?: string | null; output: string; planPath?: string | null; hasChanges?: boolean; destroys?: number; policy?: string | null; mocks?: string[]; providers?: string[]; usage?: object | null; applied?: object | null; planSha?: string | null; risk?: object | null; secrets?: string[] }): void {
     this.db.prepare(
-      'UPDATE runs SET status = ?, finished_at = ?, engine = ?, summary = ?, output = ?, plan_path = ?, has_changes = ?, destroys = ?, policy = ?, mocks = ?, providers = ?, usage = ?, applied = ? WHERE id = ?',
-    ).run(r.status, now(), r.engine ?? '', r.summary ?? null, r.output, r.planPath ?? null, r.hasChanges ? 1 : 0, r.destroys ?? 0, r.policy ?? null, r.mocks?.length ? JSON.stringify(r.mocks) : null, r.providers?.length ? JSON.stringify(r.providers) : null, r.usage ? JSON.stringify(r.usage) : null, r.applied ? JSON.stringify(r.applied) : null, id);
+      'UPDATE runs SET status = ?, finished_at = ?, engine = ?, summary = ?, output = ?, plan_path = ?, has_changes = ?, destroys = ?, policy = ?, mocks = ?, providers = ?, usage = ?, applied = ?, plan_sha = ?, risk = ?, secrets = ? WHERE id = ?',
+    ).run(r.status, now(), r.engine ?? '', r.summary ?? null, r.output, r.planPath ?? null, r.hasChanges ? 1 : 0, r.destroys ?? 0, r.policy ?? null, r.mocks?.length ? JSON.stringify(r.mocks) : null, r.providers?.length ? JSON.stringify(r.providers) : null, r.usage ? JSON.stringify(r.usage) : null, r.applied ? JSON.stringify(r.applied) : null, r.planSha ?? null, r.risk ? JSON.stringify(r.risk) : null, r.secrets?.length ? JSON.stringify(r.secrets) : null, id);
+  }
+
+  // ---- emergency access ----
+
+  createGrant(g: { user: string; repo: string; projects: string[]; actions: string[]; bypass: string[]; reason: string; grantedBy: string; expiresAt: string }): Grant {
+    const res = this.db.prepare('INSERT INTO grants (user, repo, projects, actions, bypass, reason, granted_by, created_at, expires_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)')
+      .run(g.user, g.repo, JSON.stringify(g.projects), JSON.stringify(g.actions), JSON.stringify(g.bypass), g.reason, g.grantedBy, now(), g.expiresAt);
+    return this.getGrant(Number(res.lastInsertRowid))!;
+  }
+
+  getGrant(id: number): Grant | null {
+    const r = this.db.prepare('SELECT * FROM grants WHERE id = ?').get(id);
+    return r ? toGrant(r) : null;
+  }
+
+  // Grants not revoked and not yet expired at `at`.
+  activeGrants(at = now()): Grant[] {
+    return this.db.prepare('SELECT * FROM grants WHERE revoked_at IS NULL AND expires_at > ? ORDER BY id DESC').all(at).map(toGrant);
+  }
+
+  listGrants(limit = 100): Grant[] {
+    return this.db.prepare('SELECT * FROM grants ORDER BY id DESC LIMIT ?').all(limit).map(toGrant);
+  }
+
+  revokeGrant(id: number, by: string): boolean {
+    return Number(this.db.prepare('UPDATE grants SET revoked_at = ?, revoked_by = ? WHERE id = ? AND revoked_at IS NULL').run(now(), by, id).changes) > 0;
+  }
+
+  markGrantUsed(id: number): void {
+    this.db.prepare('UPDATE grants SET used_at = coalesce(used_at, ?) WHERE id = ?').run(now(), id);
+  }
+
+  // Grants that ran out (not revoked) and haven't been reported yet; marks them reported.
+  takeExpiredGrants(at = now()): Grant[] {
+    const rows = this.db.prepare('SELECT * FROM grants WHERE revoked_at IS NULL AND expires_at <= ? AND expiry_noted = 0').all(at).map(toGrant);
+    if (rows.length) this.db.prepare(`UPDATE grants SET expiry_noted = 1 WHERE id IN (${rows.map(() => '?').join(',')})`).run(...rows.map(g => g.id));
+    return rows;
   }
 
   saveFindings(run: Run, mode: string, findings: { rule: string; severity: string; address: string; message: string }[]): void {
@@ -348,6 +423,51 @@ export class Store {
       },
       drift: all<{ status: string; n: number }>(`SELECT status, count(*) AS n FROM drift_runs WHERE at >= ? AND at < ? GROUP BY status`, from, to),
       locks: one<{ n: number; oldest: string | null }>(`SELECT count(*) AS n, min(created_at) AS oldest FROM locks`),
+      delivery: this.delivery(from, to),
+    };
+  }
+
+  // Projects whose runs take longest on average (finished runs only).
+  slowestProjects(from: string, to = '9999-12-31T00:00:00.000Z', limit = 5): { repo: string; project: string; runs: number; avgSeconds: number }[] {
+    return (this.db.prepare(
+      `SELECT repo, project, count(*) AS runs, avg((julianday(finished_at) - julianday(started_at)) * 86400) AS avg
+       FROM runs WHERE finished_at IS NOT NULL AND status != 'running' AND started_at >= ? AND started_at < ?
+       GROUP BY repo, project HAVING runs >= 2 ORDER BY avg DESC LIMIT ?`,
+    ).all(from, to, limit) as { repo: string; project: string; runs: number; avg: number }[])
+      .map(r => ({ repo: r.repo, project: r.project, runs: r.runs, avgSeconds: Math.round(r.avg) }));
+  }
+
+  // How fast and how safely changes reach infrastructure.
+  //   leadTime: first run of a PR → its project's first successful apply (hours)
+  //   failureRate: share of applies that failed
+  //   recovery: a failed apply → the next successful apply of that project (hours)
+  delivery(from: string, to = '9999-12-31T00:00:00.000Z') {
+    const all = <T>(sql: string, ...args: (string | number)[]) => this.db.prepare(sql).all(...args) as T[];
+    const hours = (a: string, b: string) => (Date.parse(b) - Date.parse(a)) / 3_600_000;
+    const pct = (xs: number[], p: number) => {
+      const s = [...xs].sort((a, b) => a - b);
+      return s.length ? Math.round(s[Math.min(s.length - 1, Math.floor((s.length - 1) * p))] * 10) / 10 : null;
+    };
+    const lead = all<{ first: string; applied: string }>(
+      `SELECT (SELECT min(r2.started_at) FROM runs r2 WHERE r2.repo = a.repo AND r2.pr = a.pr) AS first, min(a.finished_at) AS applied
+       FROM runs a WHERE a.kind = 'apply' AND a.status = 'success' AND a.finished_at IS NOT NULL AND a.started_at >= ? AND a.started_at < ?
+       GROUP BY a.repo, a.pr, a.project`, from, to).map(r => hours(r.first, r.applied)).filter(h => h >= 0);
+    const applies = all<{ status: string; n: number }>(
+      `SELECT status, count(*) AS n FROM runs WHERE kind = 'apply' AND status IN ('success', 'failed') AND started_at >= ? AND started_at < ? GROUP BY status`, from, to);
+    const ok = applies.find(a => a.status === 'success')?.n ?? 0;
+    const failed = applies.find(a => a.status === 'failed')?.n ?? 0;
+    const recovery = all<{ failedAt: string; fixedAt: string | null }>(
+      `SELECT f.finished_at AS failedAt,
+        (SELECT min(s.finished_at) FROM runs s WHERE s.repo = f.repo AND s.project = f.project AND s.kind = 'apply' AND s.status = 'success' AND s.finished_at > f.finished_at) AS fixedAt
+       FROM runs f WHERE f.kind = 'apply' AND f.status = 'failed' AND f.finished_at IS NOT NULL AND f.started_at >= ? AND f.started_at < ?`, from, to)
+      .filter(r => r.fixedAt).map(r => hours(r.failedAt, r.fixedAt!)).filter(h => h >= 0);
+    const days = Math.max(1, (Math.min(Date.parse(to), Date.now()) - Date.parse(from)) / 86_400_000);
+    return {
+      leadTime: { count: lead.length, p50: pct(lead, 0.5), p90: pct(lead, 0.9) },
+      failureRate: ok + failed ? Math.round((failed / (ok + failed)) * 1000) / 10 : null,
+      applies: ok + failed,
+      appliesPerWeek: Math.round(((ok + failed) / days) * 7 * 10) / 10,
+      recovery: { count: recovery.length, p50: pct(recovery, 0.5) },
     };
   }
 

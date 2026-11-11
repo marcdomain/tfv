@@ -3,7 +3,7 @@ name: Release teriac-server image and chart
 on:
   push:
     tags:
-      - 'server-v[0-9]+.[0-9]+.[0-9]+'   # e.g. server-v0.1.1 (CLI releases use v*)
+      - 'server-v[0-9]+.[0-9]+.[0-9]+'   # e.g. server-v0.2.0 (CLI releases use v*)
 
 permissions:
   contents: read

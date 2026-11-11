@@ -156,13 +156,14 @@ test('1. push → autoplan both projects, sticky comment + checks with Apply but
   assert.ok(body.startsWith(MARKER));
   assert.match(body, /teriac · 2 projects/);
   assert.match(body, /\[!CAUTION\]/);
-  assert.match(body, /\| \[`envs\/dev`\]\([^)]+\) \| terraform 1\.9\.8 \| terraform \(built-in\) \| ⚠️ \*\*\+3 ~1 ±1 −1\*\* \| 🔒 1 more approval from write \|/);
+  assert.match(body, /\| \[`envs\/dev`\]\([^)]+\) \| terraform 1\.9\.8 \| terraform \(built-in\) \| ⚠️ \*\*\+3 ~1 ±1 −1\*\* \| 🟡 Medium \| 🔒 1 more approval from write \|/);
+  assert.doesNotMatch(body, /\*\*To apply/, 'the table has the apply state and ▶ Apply');
   assert.match(body, /\| \[`envs\/prod`\]\([^)]+\) \|.*\| 🔒 1 more approval from team:platform-admins \|/);
   // Rich parts: counts, who ran it (avatar + profile link, no @mention), next steps.
-  assert.match(body, /<sub>⚠️ 4 to destroy or replace · 🔒 2 waiting<\/sub>/);
+  assert.match(body, /<sub>🔒 2 waiting · 🔺 1 high risk<\/sub>/);
   assert.match(body, /\| <img src="https:\/\/github\.com\/bob\.png\?size=36" width="18" height="18" align="center" alt=""> \[bob\]\(https:\/\/github\.com\/bob\) \|/);
   assert.doesNotMatch(body, /@bob/);
-  assert.match(body, /\*\*Next steps\*\*\n- 🔒 \*\*`envs\/dev`\*\* needs 1 more approval from write\n- 🔒 \*\*`envs\/prod`\*\* needs 1 more approval from team:platform-admins/);
+  assert.doesNotMatch(body, /- 🔒 \*\*`envs/, 'blockers are only in the table');
   assert.match(body, /\[Open in the teriac dashboard\]\(https:\/\/teriac\.example\.com\/#runs\/\d+\)/);
   const check = gh.checks.get('teriac: envs/prod')!;
   assert.equal(check.conclusion, 'neutral');
@@ -191,7 +192,7 @@ test('3. stale approvals do not count; fresh ones do', async () => {
   assert.doesNotMatch(applies[0].output, /LEAK/); // server secrets stripped from terraform's env
   assert.match(gh.sticky.get(1)!, /\| \[`envs\/dev`\]\([^)]+\) \|.*\| ✅ applied \|/);
   assert.match(gh.sticky.get(1)!, /\*\*Approved by\*\* <img src="https:\/\/github\.com\/carol\.png\?size=36"[^>]*> \[carol\]\(https:\/\/github\.com\/carol\)/);
-  assert.match(gh.sticky.get(1)!, /\*\*To apply:\*\*[^\n]*:\n```\nteriac apply -p envs\/prod\n```/);
+  assert.match(gh.sticky.get(1)!, /\| \[`envs\/prod`\]\([^)]+\) \|.*\| 🟢 ready · \[\*\*▶ Apply\*\*\]/);
 });
 
 test('4. Apply button on prod: a platform-admin applies after a team approval', async () => {
@@ -303,8 +304,8 @@ test('11. defaults: ⏳ reply at once, then a NEW comment per plan with apply co
   assert.equal(mine().length, 1);
   const first = mine()[0].body;
   assert.doesNotMatch(first, /spinner\.gif/, 'the spinning reply was turned into the report');
-  assert.match(first, /\| Project \| Engine \| Providers \| Plan \| Apply \| By \|/);
-  assert.match(first, /\*\*To apply:\*\* comment this, or \[\*\*▶ Apply\*\*\]\(https:\/\/github\.test\/runs\/teriac%3A%20envs%2Fdev\):\n```\nteriac apply -p envs\/dev\n```/);
+  assert.match(first, /\| Project \| Engine \| Providers \| Plan \| Risk \| Apply \| By \|/);
+  assert.match(first, /\| 🟢 ready · \[\*\*▶ Apply\*\*\]\(https:\/\/github\.test\/runs\/teriac%3A%20envs%2Fdev\) \|/);
   assert.doesNotMatch(first, /is ready to apply/);
 
   // While a command runs, its reply says so; afterwards it holds that command's report.
@@ -372,7 +373,7 @@ test('15. policy checks (enforce + override) and the two-person rule', async () 
   assert.match(body, /🛡️ 2 policy findings/);
   assert.match(body, /🛡️ \*\*Policy \(enforced: blocks apply\):\*\* 2 findings/);
   assert.match(body, /🔴 \*\*no-prod-destroy\*\* · `terraform_data\.database` · needs a security override/);
-  assert.match(body, /\*\*To apply \(someone other than alice\):\*\* first 2 policy findings \(no-prod-destroy\)[^\n]*\. Then comment:\n```\nteriac apply -p envs\/prod\n```/);
+  assert.match(body, /\| 🔒 [^|]*2 policy findings \(no-prod-destroy\)[^|]* · then someone other than alice applies \|/);
 
   const say = async (user: string, text: string) => {
     await strict.handle(gh, { kind: 'comment', repo, prNumber: 30, commentId: String(Math.random()), author: user, body: text });
@@ -380,7 +381,7 @@ test('15. policy checks (enforce + override) and the two-person rule', async () 
   };
   assert.match(await say('alice', 'teriac apply -p envs/prod'), /two-person rule: someone other than the PR author \(alice\) must apply/);
   assert.match(await say('erin', 'teriac apply -p envs/prod'), /2 policy findings \(no-prod-destroy\)/);
-  assert.match(await say('erin', 'teriac apply -p envs/prod --override'), /`--override` needs team:platform-admins/);
+  assert.match(await say('erin', 'teriac apply -p envs/prod --override'), /2 policy findings \(no-prod-destroy\) · team \[platform-admins\]\([^)]+\) can apply with `--override`/);
   await say('carol', 'teriac apply -p envs/prod --override'); // platform-admins team member
   const applied = store.latestRuns('github.com/acme/infra', 30, 'apply');
   assert.deepEqual(applied.map(r => [r.project, r.status, r.user]), [['envs/prod', 'success', 'carol']]);

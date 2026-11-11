@@ -12,7 +12,8 @@ import { loadRepoConfig, loadRepoConfigFrom, emptyRepoConfig } from './repoConfi
 import { discoverProjects, type Project } from './discovery.ts';
 import { repoPolicyFor } from './policy.ts';
 import { parseCron, cronMatches, nextRun, type Cron } from './cron.ts';
-import { lastAuthor } from './blame.ts';
+import { lastAuthor, type Author } from './blame.ts';
+import { planDriftFix, driftFixBody } from './driftfix.ts';
 import { notifyAll, type DriftReport, type ProjectDrift } from './notify.ts';
 import { matchGlob } from './glob.ts';
 import { KeyedQueue } from './app.ts';
@@ -196,6 +197,25 @@ export class DriftScheduler {
     return { report, notified };
   }
 
+  private async fixPr(e: ScheduleEntry, root: string, project: Project, plan: Record<string, any>, drift: { address: string; author: Author | null }[], result: ProjectDrift) {
+    if (!e.adapter.openPullRequest) { result.fixNote = 'drift-fix PRs are not supported on this platform'; return; }
+    try {
+      const fix = planDriftFix(root, project.dir, plan, new Map(drift.map(d => [d.address, d.author])));
+      if (!fix.edits.length) { result.fixNote = 'no fix PR: nothing here can be updated in code automatically'; return; }
+      const branch = driftBranch(project.name);
+      const url = await e.adapter.openPullRequest(e.repo, {
+        base: e.branch, branch, title: `Accept drift in ${project.name}`,
+        body: driftFixBody(project.name, e.branch, fix, e.spec.name ?? e.spec.schedule), files: fix.files,
+      });
+      if (url) result.fixPr = url;
+      else result.fixNote = `a drift-fix PR is already open (branch \`${branch}\`)`;
+      this.deps.store.audit({ repo: `${e.repo.host}/${e.repo.fullName}`, pr: 0, user: 'teriac', action: 'drift_fix_pr', project: project.name, allowed: true, reason: url ? `opened ${url} (${fix.edits.length} edits)` : `skipped: branch ${branch} exists` });
+    } catch (err) {
+      log.warn('drift: could not open a fix PR', { project: project.name, err });
+      result.fixNote = `could not open a fix PR: ${(err as Error).message.slice(0, 160)}`;
+    }
+  }
+
   private async checkProject(e: ScheduleEntry, root: string, auth: Awaited<ReturnType<VcsAdapter['cloneAuth']>>, project: Project, repoKey: string): Promise<ProjectDrift> {
     const { config, store } = this.deps;
     const last = store.lastApply(repoKey, project.name);
@@ -234,11 +254,16 @@ export class DriftScheduler {
       for (const d of refresh.summary?.drift ?? []) {
         drift.push({ address: d.address, action: d.action, author: await lastAuthor(root, project.dir, d.address, auth).catch(() => null) });
       }
-      return { project: project.name, engine, drift, pending, lastApply };
+      const result: ProjectDrift = { project: project.name, engine, drift, pending, lastApply };
+      if (drift.length && e.spec.fix_pr && refresh.plan) await this.fixPr(e, root, project, refresh.plan, drift, result);
+      return result;
     } catch (err) {
       return { project: project.name, engine, drift: [], pending: null, lastApply, error: (err as Error).message };
     }
   }
 }
+
+// Opens a PR that updates the code to match the drifted values (fix_pr: true).
+export const driftBranch = (project: string) => `teriac/drift-fix/${slug(project).toLowerCase()}`;
 
 const lastLines = (text: string, n = 6) => text.trim().split('\n').filter(l => l.trim() && !/^[│╷╵]\s*$/.test(l)).slice(-n).join('\n');

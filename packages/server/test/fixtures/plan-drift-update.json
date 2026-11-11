@@ -1,0 +1,48 @@
+{
+  "format_version": "1.2",
+  "terraform_version": "1.9.8",
+  "resource_changes": [],
+  "resource_drift": [
+    {
+      "address": "local_file.motd",
+      "mode": "managed",
+      "type": "local_file",
+      "name": "motd",
+      "provider_name": "registry.terraform.io/hashicorp/local",
+      "change": {
+        "actions": [
+          "update"
+        ],
+        "before": {
+          "filename": "b",
+          "content": "maintenance",
+          "id": "x1"
+        },
+        "after": {
+          "filename": "b",
+          "content": "all systems go",
+          "id": "x2"
+        },
+        "after_unknown": {}
+      }
+    },
+    {
+      "address": "local_file.app_config",
+      "mode": "managed",
+      "type": "local_file",
+      "name": "app_config",
+      "provider_name": "registry.terraform.io/hashicorp/local",
+      "change": {
+        "actions": [
+          "delete"
+        ],
+        "before": {
+          "filename": "a",
+          "content": "1"
+        },
+        "after": null,
+        "after_unknown": {}
+      }
+    }
+  ]
+}

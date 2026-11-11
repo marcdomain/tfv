@@ -1,4 +1,4 @@
-# teriac — Terraform, OpenTofu & Terragrunt Version Manager for macOS, Linux & Windows
+# teriac — one CLI for Terraform, OpenTofu & Terragrunt on macOS, Linux & Windows
 
 ```text
        _                _
@@ -11,7 +11,14 @@
       ---------------------------------
 ```
 
-`teriac` lets you install, switch, and manage multiple versions of **Terraform**, **OpenTofu** and **Terragrunt** without `sudo`. All binaries live in `~/.teriac/` — upgrading `teriac` itself never wipes your installed versions.
+`teriac` is one command for **Terraform**, **OpenTofu** and **Terragrunt**, with no `sudo`:
+
+- **Versions:** install, switch, pin, upgrade and remove any version; downloads are checked against the vendor's signature.
+- **Projects:** each project gets the version it asks for (`.terraform-version`, `required_version`, Terragrunt config), automatically on `cd`.
+- **Runs:** `teriac plan`, `apply`, `destroy`, `init`, `fmt` and `validate`, with targets taken from files, and `teriac exec` to run one command with any version.
+- **Speed and health:** a shared provider cache across projects, and `teriac doctor` to check the setup.
+
+Everything lives in `~/.teriac/`; upgrading `teriac` itself never touches your installed versions.
 
 ![teriac demo](https://raw.githubusercontent.com/marcdomain/teriac/main/demo.gif)
 
@@ -414,11 +421,27 @@ export TERIAC_HASHICORP_MIRROR=https://artifactory.example.com/artifactory/hashi
 export TERIAC_GITHUB_MIRROR=https://user:token@nexus.example.com/repository/github
 ```
 
-Plain `http://` mirrors and credentials in the URL are supported. Checksums are still verified against the mirrored `SHA256SUMS` file.
+Plain `http://` mirrors and credentials in the URL are supported. Checksums are still verified against the mirrored `SHA256SUMS` file, and its signature (see [Signed downloads](#signed-downloads)).
+
+Set `TERIAC_HOME` to keep teriac's files somewhere other than `~/.teriac` (for example on a shared CI cache).
 
 OpenTofu and Terragrunt version lists come from the GitHub API. If it can't be reached, installing an exact version (`teriac install 1.8.0 -p tofu`) still works; `latest` needs the list. Set `GITHUB_TOKEN` to raise GitHub's limit of 60 requests an hour.
 
 ---
+
+## Signed downloads
+
+Before installing, teriac checks that the release's checksum file is signed by the tool's
+vendor, then checks the download against it. A tampered mirror or download is refused.
+
+| Tool | Signed by | Checked |
+|---|---|---|
+| Terraform | HashiCorp (PGP) | always |
+| OpenTofu | OpenTofu (PGP) | always |
+| Terragrunt | Gruntwork (PGP) | when the release publishes a signature (releases from early 2026 on); older ones are checked against their checksum only |
+
+The vendors' public keys ship with teriac (`lib/core/keys`). If your mirror doesn't copy the
+`.sig` / `.gpgsig` files, set `TERIAC_VERIFY_SIGNATURES=false`.
 
 ## Windows support
 

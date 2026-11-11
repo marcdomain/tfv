@@ -1,11 +1,11 @@
 {
   "name": "@marcdomain/teriac",
-  "version": "0.1.2",
+  "version": "0.2.0",
   "publishConfig": {
     "access": "public",
     "provenance": true
   },
-  "description": "Terraform, OpenTofu & Terragrunt version manager",
+  "description": "One CLI for Terraform, OpenTofu & Terragrunt: install and switch versions, run plans and applies, and keep every project on the right version",
   "keywords": [
     "terraform",
     "opentofu",

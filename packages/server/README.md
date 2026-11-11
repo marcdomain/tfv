@@ -27,7 +27,7 @@ Set up the GitHub App like this:
 - **Webhook URL:** `https://<host>/events/github`
 - **Events:** pull request, issue comment, check run
 - **Permissions:** Checks (read & write), Contents (read), Issues (read & write), Pull requests
-  (read & write), Members (read)
+  (read & write), Members (read). Drift fix PRs (`fix_pr`) also need Contents (read & write).
 - **Logo:** upload [`brand/teriac-avatar.png`](../../brand/teriac-avatar.png) under *Display information*.
   Without a logo, GitHub shows the App owner's picture on teriac's comments.
 
@@ -80,9 +80,21 @@ project again Only these commands run, and arguments are checked, so nothing els
 | `TERIAC_DRIFT` | `true` | Run drift schedules |
 | `TERIAC_SESSION_SECRET` | random | Signs dashboard sessions (32+ characters). Set it, or sessions end on restart |
 | `TERIAC_API_TOKEN` | | Admin token for automation and `/api` |
+| `TERIAC_DATA_DIR` | `/data` | Database, plans, checkouts and downloaded tools |
+| `TERIAC_PORT` | `8080` | HTTP port |
+| `TERIAC_PUBLIC_URL` | `http://localhost:<port>` | The address people and GitHub use, for links and the dashboard |
+| `TERIAC_GITHUB_API_URL` | `https://api.github.com` | GitHub Enterprise Server: `https://<host>/api/v3` |
+| `TERIAC_RUN_TIMEOUT_SECONDS` | `3600` | Longest one Terraform command may run |
+| `TERIAC_LOG_LEVEL` | `info` | `debug`, `info`, `warn` or `error` |
+| `TERIAC_SESSION_HOURS` | `12` | How long a dashboard sign-in lasts |
+| `TERIAC_VERIFY_SIGNATURES` | `true` | Check the vendor's signature on downloaded Terraform, OpenTofu and Terragrunt. `false` for mirrors that don't copy `.sig` files |
 
 `TERIAC_*` values are never passed to Terraform. Each secret can also be read from a file:
-`<NAME>_FILE`.
+`<NAME>_FILE` (for example `TERIAC_SESSION_SECRET_FILE`).
+
+Terraform, scanners and scripts get the PR's details instead: `TERIAC_REPO`, `TERIAC_PR_NUMBER`,
+`TERIAC_HEAD_SHA`, `TERIAC_PROJECT`, `TERIAC_WORKSPACE` and `TERIAC_USER` (who ran the command).
+Drift checks set `TERIAC_REPO`, `TERIAC_BRANCH`, `TERIAC_PROJECT` and `TERIAC_WORKSPACE`.
 
 ## Rules: `repos.yaml`
 
@@ -131,6 +143,10 @@ permissions:
   state_mv: [maintain]    # except state mv: maintainers too
   force_unlock: []        # and nobody may force-unlock
 ```
+
+Each entry's `id` is one repo (`github.com/acme/infra`) or a glob (`github.com/acme/*`). A repo uses
+only the first entry that matches; entries don't combine, so list exact repos before globs and give
+each everything it needs. Drift schedules need an exact repo.
 
 Only approvals of the current commit count, and the author's own approval never counts. Each
 project needs only its own approvals.
@@ -193,7 +209,7 @@ audited.
 
 ```yaml
 policies:                     # in repos.yaml (server side, so a PR can't change them)
-  mode: enforce               # off | audit | enforce (a repo can only make it stricter)
+  mode: enforce               # off | audit | enforce (a repo entry can make it stricter, not looser)
   override: [team:security]
   rules:
     - name: no-public-s3
@@ -206,6 +222,8 @@ policies:                     # in repos.yaml (server side, so a PR can't change
       projects: ["prod/**"]
       actions: [delete, replace]
       message: Destroying in prod needs a security override
+  builtin: [security]         # ready-made AWS security rules (below)
+  disable: [aws-kms-rotation-off]   # turn single built-in rules off
   commands:                   # any scanner; non-zero exit = finding
     - name: checkov
       run: [checkov, -f, "{plan_json}", --framework, terraform_plan, --compact, --quiet]
@@ -225,10 +243,168 @@ Values only known after apply are skipped.
 Findings appear in the PR comment, the check run and the dashboard's **Audit → Policy findings**
 tab.
 
+**Built-in security rules** (`builtin: [security]`): they report like any other rule, so `mode`,
+`--override` and the findings tab all apply.
+
+| Rule | Flags |
+|---|---|
+| `aws-s3-public-acl` | bucket ACLs `public-read`, `public-read-write`, `authenticated-read` |
+| `aws-s3-public-access-block-off` | a public access block with any setting turned off |
+| `aws-s3-public-policy` | a bucket policy allowing `"Principal": "*"` without a condition |
+| `aws-security-group-open-ingress` | ingress from `0.0.0.0/0` or `::/0` on anything but ports 80 and 443 |
+| `aws-storage-unencrypted` | RDS, Aurora, DocumentDB, Neptune, EBS, EFS, ElastiCache or Redshift without encryption |
+| `aws-iam-wildcard` | an IAM policy allowing `"Action": "*"` on `"Resource": "*"` |
+| `aws-database-public` | a publicly accessible database |
+| `aws-deletion-protection-off` | deletion protection turned off on a database, table or load balancer |
+| `aws-kms-key-deleted` | a KMS key destroyed or replaced |
+| `aws-kms-rotation-off` | a symmetric KMS key without rotation |
+| `aws-audit-or-backup-removed` | CloudTrail, AWS Config, GuardDuty or a backup vault or plan deleted, or CloudTrail logging off |
+| `aws-eks-public-endpoint` | an EKS API endpoint open to the whole internet |
+
 ## Two-person rule
 
 `two_person_rule: true` on a repo, or on a project rule in `repos.yaml`, means the PR's author
 can't apply it; someone else with apply rights must.
+
+## Approvals, rebases and out-of-date branches
+
+```yaml
+repos:
+  - id: github.com/acme/*
+    reapprove_on_change: true      # default true: a code change needs a fresh approval
+    keep_approval_on_rebase: true  # default false: a rebase or "Update branch" keeps approvals
+    stale_base: warn               # off | warn (default) | block
+    verify_plan: true              # default true: apply only the exact plan file reviewed
+```
+
+- **Rebases.** teriac fingerprints the PR's own changes: the files it changes and their exact
+  contents, compared with where the branch left the base. When an approval was given on an earlier
+  commit and the fingerprint is the same now, only the base moved, so the approval still counts.
+  The comment says whose approval was kept. A rebase where conflicts were resolved changes the
+  fingerprint and needs a new approval. When teriac can't compare (for example, more than 300
+  files changed), it asks for a new approval.
+- **Out-of-date branches.** At plan and apply, teriac checks whether the base branch changed any
+  file a project uses (its folder, local modules, Terragrunt dependencies, watched files) since the
+  PR branched. Applying such a branch could undo those changes. `warn` shows the commits on the PR
+  and in the apply reply; `block` refuses the apply until the branch is updated.
+- **Reviewed plan only.** The plan file's SHA-256 is saved when it's made and checked again before
+  apply. A changed or missing file is refused, audited, and must be planned again.
+
+A repo's `teriac.yaml` can make these stricter (`reapprove_on_change: true`,
+`keep_approval_on_rebase: false`, a stricter `stale_base`), never looser.
+
+## Risk score
+
+Every plan with changes gets a risk level, from fixed rules, so the same plan always gets the
+same score. The PR comment's Risk column shows the level, or **None** when nothing risky was found;
+the reasons are in each project's dropdown and on its check run.
+
+| Raises the level to | When the plan |
+|---|---|
+| Critical | destroys or replaces a stateful resource (database, bucket, KMS key, DNS zone, cluster, volume…) in production |
+| High | does that outside production; destroys anything in production; changes access (IAM, roles, policies) in production; changes more than 100 resources (`size_limits.high`); has high or critical policy findings |
+| Medium | destroys anything elsewhere; changes access or network resources; changes more than 25 resources (`size_limits.medium`); has medium findings; changes production at all |
+| None | anything else |
+
+```yaml
+risk:                                   # in repos.yaml (server-wide or per repo)
+  production: ["prod/**", "live/prod/**"]   # default: folders named prod, production or prd
+  stateful_types: ["mongodbatlas_cluster", "snowflake_database", "confluent_kafka_*"]  # added to the built-in list
+  size_limits: { medium: 25, high: 100 }    # changed resources that make a plan medium / high
+  extra_approval:
+    high: { from: team:sre, count: 1 }      # high and critical need one SRE approval
+    critical: { from: team:sre, count: 2 }
+```
+
+What counts as stateful (built in): databases and clusters (RDS, Aurora, DynamoDB, Cloud SQL, Cosmos DB,
+Redis, OpenSearch, Kafka…), storage (S3, GCS, Azure storage, EBS, EFS, disks), keys and secrets (KMS,
+Key Vault, Secrets Manager), DNS zones, Kubernetes clusters, namespaces and volumes, backup vaults and
+CloudTrail. `stateful_types` adds your own. Policy findings feed the score too, so a rule with
+`severity: critical` makes a plan at least High.
+
+**Server-wide and per repo.** `risk`, `freezes`, `protected`, `secret_scan` and `policies` can be set
+at the top of `repos.yaml` (every repo) and in a repo's entry (that repo only):
+
+- **Lists add up:** `freezes`, `protected`, `policies.rules`, `risk.stateful_types`.
+- **Only stricter:** `secret_scan`, `policies.mode`, `risk.size_limits` (the server sets a minimum).
+- **Anything else** set on the repo wins for that repo (`risk.production`, `risk.extra_approval`,
+  `policies.override`).
+
+A repo's own `teriac.yaml` is different: repo owners control it, so it can only tighten
+(`reapprove_on_change`, `keep_approval_on_rebase`, `stale_base`, and its rules).
+
+The check run also puts notes on the code: each resource block that will be destroyed or replaced,
+and each policy finding, shows up on its line in the PR's **Files changed**.
+
+## Change freezes and protected resources
+
+```yaml
+freezes:                                # in repos.yaml (server-wide or per repo)
+  - { name: weekend, projects: ["prod/**"], schedule: "0 15 * * 5", hours: 63, timezone: Europe/Madrid, override: [team:sre] }  # Fri 15:00 → Mon 06:00
+  - { name: holidays, from: "2026-12-23", to: "2027-01-02" }   # whole days, both included; no override
+protected:
+  - { projects: ["prod/**"], resources: ["aws_db_instance.*", "aws_kms_key.*"], override: [team:sre] }
+```
+
+During a freeze, plans still run but applies and state edits (`import`, `state rm`, …) are
+refused, with when the freeze ends. A protected resource is never destroyed or replaced:
+the apply is refused and the block is marked on the code. Resource globs match inside modules too
+(`aws_db_instance.*` covers `module.db.aws_db_instance.main[0]`).
+
+Each entry has its own `override`: the people who may apply anyway with
+`teriac apply -p <project> --override`. Without one, nobody can skip that entry. `--override` skips
+only the entries (and policy findings, via `policies.override`) whose list includes the person; the
+reply says who can override what is still blocking, and every use is audited.
+
+## Leaked-secret scan
+
+Before any output reaches a PR comment, a check run or the dashboard, teriac looks for things that
+look like secrets: AWS keys, private keys, GitHub, GitLab, Slack and npm tokens, Slack webhooks,
+Google API keys, Stripe keys, JWTs, Azure storage keys, and `password = "…"` in plan lines.
+Terraform's own `(sensitive value)` is left alone.
+
+```yaml
+secret_scan:                            # in repos.yaml
+  mode: redact                          # redact (default) | fail | off; a repo entry can make it stricter, not looser
+  patterns:                             # your own, optional
+    - { name: acme-token, regex: "acme_[0-9a-f]{32}" }
+```
+
+- `redact` replaces each match with `‹redacted: aws-access-key›` and adds a warning.
+- `fail` also refuses the plan, so it can't be applied until the secret is gone.
+
+Every find is audited.
+
+## Emergency access
+
+```yaml
+break_glass:                            # in repos.yaml
+  grantors: [admin, "user:sre-lead@acme.com", "group:oncall"]  # dashboard admins, people, SSO groups
+  max_hours: 4
+  notify: [infra-alerts]
+```
+
+On the dashboard's **Access** page, a grantor gives someone a permission for a few hours, with a
+reason: for example `apply` on `prod/**`. A grant can also skip approvals, freezes, protected
+resources or enforced policies, for when the people who'd approve can't be reached. It ends on its
+own, and can be revoked. The grant, its first use, a revoke and the expiry all go to the audit log
+and the `notify` channels.
+
+## Weekly summary
+
+```yaml
+summary:                                # in repos.yaml
+  schedule: "0 9 * * 1"                 # Mondays at 09:00
+  timezone: Europe/Madrid
+  notify: [infra-alerts]
+  days: 7
+```
+
+It sends:
+- runs, failures, and how fast changes ship (PR to applied, failed applies, time to fix);
+- open drift, and locks held for more than 3 days;
+- the slowest projects and the most active people;
+- policy findings, refused actions, and emergency access given.
 
 ## Drift checks
 
@@ -246,7 +422,7 @@ repos:
         projects: ["envs/prod", "live/prod/**"]
         branch: main
         schedule: "0 6 * * 1-5"
-        timezone: Europe/Berlin
+        timezone: Europe/Madrid
         notify: [infra-alerts, ops-teams]
 ```
 
@@ -260,6 +436,14 @@ or Slack's lookup by email.
 
 A message goes out only when the findings change (`notify_when: always` sends one every run).
 Failed checks always notify.
+
+**Fix PRs.** With `fix_pr: true` on a schedule, teriac opens a PR that updates the code to match
+what is running, and links it in the message. It only edits values written plainly in the
+resource block (a string, number or `true`/`false`) that still match the last applied value.
+Values from variables, expressions, modules and nested blocks are listed in the PR for a person,
+with who last changed them. Merge the PR to accept the change; close it and apply the base branch
+to put things back. One PR per project at a time (branch `teriac/drift-fix/<project>`). The
+GitHub App needs **Contents: read & write** for this.
 
 ## Tamper-proof output
 
@@ -276,14 +460,17 @@ Open the server's URL in a browser. It shows:
 - every plan and apply, with its change list and redacted log;
 - locks, with an Unlock button;
 - drift schedules, findings, and who last changed each resource;
-- the audit log.
+- the audit log;
+- **Access**: emergency access grants (see [Emergency access](#emergency-access));
+- **Metrics**: runs, timings, resource use, and delivery: PR to applied, failed applies, time to
+  fix, applies per week.
 
 It has light and dark themes. Viewers can see everything; admins can also unlock and start drift
 checks.
 
 | Sign-in | Settings |
 |---|---|
-| Okta or any OIDC provider | `TERIAC_OIDC_ISSUER`, `TERIAC_OIDC_CLIENT_ID`, `TERIAC_OIDC_CLIENT_SECRET`, `TERIAC_OIDC_ADMIN_GROUPS`, `TERIAC_OIDC_ALLOWED_GROUPS`. Redirect URI: `<public url>/auth/oidc/callback` |
+| Okta or any OIDC provider | `TERIAC_OIDC_ISSUER`, `TERIAC_OIDC_CLIENT_ID`, `TERIAC_OIDC_CLIENT_SECRET`, `TERIAC_OIDC_ADMIN_GROUPS`, `TERIAC_OIDC_ALLOWED_GROUPS`; optional `TERIAC_OIDC_NAME` (button label), `TERIAC_OIDC_SCOPES` (default `openid,profile,email,groups`), `TERIAC_OIDC_GROUPS_CLAIM` (default `groups`). Redirect URI: `<public url>/auth/oidc/callback` |
 | Username and password | `dashboard.users` in `repos.yaml`, or `TERIAC_DASHBOARD_USERS_FILE`. Hash passwords with `node packages/server/src/hash-password.ts` |
 | API token | `TERIAC_API_TOKEN` (admin) |
 

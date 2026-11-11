@@ -8,6 +8,12 @@ import { randomBytes } from 'node:crypto';
 import type { AuthConfig, DashboardUser } from './auth.ts';
 import { REACTIONS, type Ack } from './vcs/types.ts';
 import { validatePolicies, type PolicyConfig } from './policies.ts';
+import {
+  validateSecretScan, validateRisk, validateFreezes, validateProtected, validateBreakGlass, validateSummary,
+  validateStaleBase, validateBool,
+  type SecretScanConfig, type SecretScanMode, type RiskConfig, type FreezeConfig, type ProtectedConfig,
+  type BreakGlassConfig, type SummaryConfig, type StaleBaseMode,
+} from './safety-config.ts';
 
 export type Requirement = 'approved' | 'mergeable' | 'undiverged';
 export const REQUIREMENTS: Requirement[] = ['approved', 'mergeable', 'undiverged'];
@@ -53,6 +59,15 @@ export interface RepoPolicy {
   two_person_rule?: boolean;                  // the PR author may not apply (any project in the repo)
   policies?: PolicyConfig;                    // extra policy rules / stricter mode for this repo
   comment_mode?: 'new' | 'update';            // new comment per plan, or one comment edited in place
+  // Approvals and out-of-date branches.
+  reapprove_on_change?: boolean;              // default true: a code change needs a fresh approval
+  keep_approval_on_rebase?: boolean;          // default false: a rebase (same changes) keeps approvals
+  stale_base?: StaleBaseMode;                 // default warn: base changed files this project uses
+  verify_plan?: boolean;                      // default true: apply only the exact plan file reviewed
+  secret_scan?: SecretScanMode;               // stricter than the server's mode, never looser
+  risk?: RiskConfig;
+  freezes?: FreezeConfig;
+  protected?: ProtectedConfig;
   projects?: ProjectRule[];
   drift?: DriftSchedule[];                    // server-side schedules (id must be one repo)
 }
@@ -68,6 +83,7 @@ export interface DriftSchedule {
   notify: string[];                           // channel names from repos.yaml
   notify_when?: 'changed' | 'always';         // default "changed"
   include_pending?: boolean;                  // also report merged-but-unapplied changes (default true)
+  fix_pr?: boolean;                           // open a PR that updates the code to match (default false)
 }
 
 export type ChannelType = 'slack' | 'teams' | 'discord' | 'googlechat' | 'webhook';
@@ -96,6 +112,12 @@ export interface ServerPolicy {
   people: Person[];
   users: DashboardUser[];                     // dashboard username/password sign-in
   policies?: PolicyConfig;                    // policy checks for every repo
+  secretScan?: SecretScanConfig;
+  risk?: RiskConfig;
+  freezes?: FreezeConfig;
+  protected?: ProtectedConfig;
+  breakGlass?: BreakGlassConfig;
+  summary?: SummaryConfig;
 }
 
 export interface GitHubConfig {
@@ -126,6 +148,12 @@ export interface ServerConfig {
   people: Person[];
   auth: AuthConfig;
   policies?: PolicyConfig;
+  secretScan?: SecretScanConfig;
+  risk?: RiskConfig;
+  freezes?: FreezeConfig;
+  protected?: ProtectedConfig;
+  breakGlass?: BreakGlassConfig;
+  summary?: SummaryConfig;
 }
 
 const readSecret = (env: NodeJS.ProcessEnv, name: string): string | undefined => {
@@ -175,6 +203,7 @@ export const validateDrift = (list: unknown, where: string, channels?: Record<st
     if (!Array.isArray(d.projects) || !d.projects.length) throw new Error(`${at}.projects needs at least one project or glob`);
     if (!Array.isArray(d.notify) || !d.notify.length) throw new Error(`${at}.notify needs at least one channel`);
     if (d.notify_when && !['changed', 'always'].includes(d.notify_when)) throw new Error(`${at}.notify_when must be "changed" or "always"`);
+    validateBool(d.fix_pr, `${at}.fix_pr`);
     if (channels) {
       for (const c of d.notify) if (!channels[c]) throw new Error(`${at}.notify: no channel named "${c}" in repos.yaml`);
     }
@@ -202,7 +231,15 @@ export const parseServerPolicy = (text: string): ServerPolicy => {
   }
   const policies = validatePolicies(doc.policies, 'policies');
   for (const [i, r] of repos.entries()) r.policies = validatePolicies(r.policies, `repos[${i}].policies`);
-  return { repos, channels, people, users, policies };
+  return {
+    repos, channels, people, users, policies,
+    secretScan: validateSecretScan(doc.secret_scan, 'secret_scan'),
+    risk: validateRisk(doc.risk, 'risk'),
+    freezes: validateFreezes(doc.freezes, 'freezes'),
+    protected: validateProtected(doc.protected, 'protected'),
+    breakGlass: validateBreakGlass(doc.break_glass, 'break_glass', channels),
+    summary: validateSummary(doc.summary, 'summary', channels),
+  };
 };
 
 export const parseUsers = (list: unknown, where: string): DashboardUser[] => {
@@ -259,6 +296,15 @@ export const parseReposYaml = (text: string): RepoPolicy[] => {
     for (const r of repo.apply_requirements ?? []) {
       if (!REQUIREMENTS.includes(r)) throw new Error(`repos[${i}]: unknown apply requirement "${r}"`);
     }
+    const at = `repos[${i}]`;
+    validateBool(repo.reapprove_on_change, `${at}.reapprove_on_change`);
+    validateBool(repo.keep_approval_on_rebase, `${at}.keep_approval_on_rebase`);
+    validateBool(repo.verify_plan, `${at}.verify_plan`);
+    validateStaleBase(repo.stale_base, `${at}.stale_base`);
+    if (repo.secret_scan !== undefined) repo.secret_scan = validateSecretScan(repo.secret_scan, `${at}.secret_scan`)?.mode;
+    validateRisk(repo.risk, `${at}.risk`);
+    validateFreezes(repo.freezes, `${at}.freezes`);
+    validateProtected(repo.protected, `${at}.protected`);
     for (const [j, p] of asList<ProjectRule>(repo.projects, `repos[${i}].projects`).entries()) {
       if (typeof p.match !== 'string') throw new Error(`repos[${i}].projects[${j}].match is required`);
       for (const action of Object.keys(p.permissions ?? {})) {
@@ -340,6 +386,12 @@ export const loadConfig = (env: NodeJS.ProcessEnv = process.env): ServerConfig =
     channels: policy.channels,
     people: policy.people,
     policies: policy.policies,
+    secretScan: policy.secretScan,
+    risk: policy.risk,
+    freezes: policy.freezes,
+    protected: policy.protected,
+    breakGlass: policy.breakGlass,
+    summary: policy.summary,
     auth: loadAuth(env, publicUrl, policy.users),
   };
 };
