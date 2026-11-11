@@ -33,28 +33,93 @@ config:
   drift: true                   # run drift schedules
   publicUrl: ""                 # defaults to the first ingress host
   logLevel: info
+  verifySignatures: true        # check vendor signatures on downloaded Terraform/OpenTofu/Terragrunt; false for mirrors without .sig files
 
-# Contents of repos.yaml: rules, approvers, channels, people, drift schedules.
-# See packages/server/README.md. Mounted at /config/repos.yaml.
+# Contents of repos.yaml: rules, approvers, channels, people, drift schedules, and the
+# safety settings (risk, freezes, protected resources, secret scan, emergency access,
+# weekly summary). See packages/server/README.md. Mounted at /config/repos.yaml.
 repos: {}
 #  channels:
 #    infra-alerts: { type: slack, channel: "#infra-drift", token_env: TERIAC_SLACK_TOKEN }
-#  repos:
-#    - id: github.com/acme/*
+#  repos:                                 # each entry applies to the repos its id matches: one repo
+#                                         # (github.com/acme/infra) or a glob (github.com/acme/*). A repo
+#                                         # uses only the first entry that matches (entries don't combine), so
+#                                         # list exact repos first and give them everything they need.
+#    - id: github.com/acme/infra          # one repo (drift schedules need an exact repo like this)
+#      drift:
+#        - { name: prod-nightly, projects: ["prod/**"], schedule: "0 6 * * 1-5", notify: [infra-alerts], fix_pr: true }  # fix_pr needs Contents: write
+#    - id: github.com/acme/*              # every other repo in the acme org
 #      require_apply_project: true
-#      allow_state_changes: true          # false: no import/taint/state rm/state mv/force-unlock from PRs
+#      # Commands that change the state outside a reviewed plan (import, taint, untaint,
+#      # state rm, state mv, force-unlock) all need, like an apply: their permission below,
+#      # the project's approvals, no change freeze, and teriac's lock on the project. They're
+#      # audited, and the project is planned again afterwards. Read-only commands (state list,
+#      # state show, show, output, validate, providers, fmt) only need their permission.
+#      allow_state_changes: true          # false: none of the state-changing commands from PRs
 #      projects:
 #        - match: prod/**
 #          permissions:
 #            apply: [team:platform-admins]
-#            apply_destroy: [admin]
-#            state_read: [team:platform-admins]   # state show, show, output
-#            state_remove: [admin]                # state rm, state mv, force-unlock
+#            apply_destroy: [admin]               # plans that delete or replace
+#            state_read: [team:platform-admins]   # state show, show, output (default: same as plan)
+#            state_write: [team:platform-admins]  # import, taint, untaint (default: same as apply)
+#            state_remove: [admin]                # state rm, state mv, force-unlock (default: same as apply_destroy)
+#            # force-unlock runs `terraform force-unlock`: it releases Terraform's lock in the state
+#            # backend (S3/DynamoDB, ...) left by a crashed run ("Error acquiring the state lock").
+#            # Releasing it while a run is writing can corrupt the state. It is NOT `teriac unlock`,
+#            # which only frees teriac's own PR lock and never touches Terraform or the backend.
 #            force_unlock: []                     # single commands can be set too; [] = nobody
 #          approvals: [{ from: team:platform-admins, count: 2 }]
+#      # Approvals and out-of-date branches
+#      reapprove_on_change: true          # default true: a code change needs a fresh approval
+#      keep_approval_on_rebase: true      # default false: a rebase that doesn't change the PR's code keeps approvals
+#      stale_base: warn                   # off | warn (default) | block: base branch changed this project's files
+#      verify_plan: true                  # default true: apply only the exact plan file that was reviewed
+#      # The safety settings below can also go here, for this repo only. Lists (freezes, protected,
+#      # policies.rules, risk.stateful_types) add to the server-wide ones; secret_scan, policies.mode
+#      # and risk.size_limits can only get stricter; anything else set here wins for this repo.
+#      secret_scan: fail                  # this repo: refuse plans with secrets (server-wide: redact)
+#
+#  # Server-wide safety settings: they apply to every repo above.
+#  policies:
+#    mode: enforce                        # off | audit (report only) | enforce (findings block apply)
+#    builtin: [security]                  # 12 ready-made AWS security rules, each with a fixed severity
+#    disable: []                          # e.g. [aws-kms-rotation-off]
+#    override: [team:security]            # may apply anyway with --override (audited)
+#    rules:                               # your own; you set the severity (low | medium | high | critical, default high)
+#      - { name: no-prod-destroy, projects: ["prod/**"], actions: [delete, replace], severity: critical, message: Destroying in prod needs a security override }
+#      - { name: rds-encrypted, resource: aws_db_instance, require: { attribute: storage_encrypted, equals: true }, severity: high }
+#  risk:                                  # scored automatically: the PR's Risk column shows None, Medium, High or
+#                                         # Critical (reasons in each project's dropdown); high/critical policy
+#                                         # findings raise it. These tune the inputs:
+#    production: ["prod/**"]              # default: folders named prod, production or prd
+#    stateful_types: ["mongodbatlas_cluster", "snowflake_database"]  # count like databases (added to the built-in list)
+#    size_limits: { medium: 25, high: 100 }   # changed resources that make a plan medium / high
+#    extra_approval:
+#      high: { from: team:sre, count: 1 }
+#  freezes:                               # no applies or state edits in these windows (plans still run)
+#    - { name: weekend, projects: ["prod/**"], schedule: "0 15 * * 5", hours: 63, timezone: Europe/Madrid, override: [team:sre] }
+#    - { name: holidays, from: "2026-12-23", to: "2027-01-02" }   # no override: nobody can skip it
+#  protected:                             # never destroyed or replaced
+#    - { projects: ["prod/**"], resources: ["aws_db_instance.*", "aws_kms_key.*"], override: [team:sre] }
+#  # override: who may apply anyway with `teriac apply -p <project> --override` (audited).
+#  secret_scan:
+#    mode: redact                         # redact (default) | fail | off
+#    patterns: []                         # e.g. [{ name: acme-token, regex: "acme_[0-9a-f]{32}" }]
+#  break_glass:                           # emergency access from the dashboard's Access page
+#    grantors: [admin]                    # admin, "user:<name or email>", "group:<SSO group>"
+#    max_hours: 4
+#    notify: [infra-alerts]
+#  summary:                               # weekly chat summary
+#    schedule: "0 9 * * 1"
+#    timezone: Europe/Madrid
+#    notify: [infra-alerts]
 
 dashboard:
-  # Sign-in methods; turn on any mix. Viewers read, admins can unlock and run drift checks.
+  # Sign-in methods; turn on any mix. Viewers read; admins can unlock, run drift checks and revoke
+  # emergency access. Grantors (repos.break_glass.grantors) give emergency access on the Access page:
+  # "admin" = dashboard admins, "user:<x>" matches a username or SSO email, "group:<x>" an SSO group
+  # (from groupsClaim below).
   oidc:                         # Okta, Azure AD, Google, Keycloak, Auth0...
     enabled: false
     name: Okta                  # button label

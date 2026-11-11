@@ -17,7 +17,11 @@ export interface ProjectDrift {
   pending: { add: number; change: number; destroy: number; replace: number } | null;
   lastApply: { user: string; pr: number; at: string } | null;
   error?: string;
+  fixPr?: string | null;      // drift-fix PR opened for this project
+  fixNote?: string;           // why none was opened (e.g. one is already open)
 }
+
+const fixText = (p: ProjectDrift) => (p.fixPr ? `Fix PR: ${p.fixPr}` : p.fixNote ?? '');
 
 export interface DriftReport {
   repo: string;                    // "acme/infra"
@@ -155,6 +159,8 @@ export const slackMessage = async (r: DriftReport, mention: (id: Identity) => Pr
     const pending = pendingText(p.pending);
     if (pending) lines.push(pending);
     if (p.lastApply) lines.push(`Last applied by ${await mention({ name: p.lastApply.user, github: p.lastApply.user })} via PR #${p.lastApply.pr}`);
+    if (p.fixPr) lines.push(`:wrench: <${p.fixPr}|Fix PR> updates the code to match`);
+    else if (p.fixNote) lines.push(`:wrench: ${p.fixNote}`);
     blocks.push({ type: 'divider' }, { type: 'section', text: { type: 'mrkdwn', text: lines.join('\n').slice(0, 2900) } });
   }
   return { text: headline(r), blocks };
@@ -187,7 +193,7 @@ export const teamsMessage = (r: DriftReport, people: Person[]) => {
       `- \`${d.address}\` ${ACTION_TEXT[d.action] ?? d.action}${d.author ? `, last changed by ${at({ name: d.author.name, email: d.author.email })} in ${short(d.author.sha)}` : ''}`);
     if (p.drift.length > MAX_ITEMS) items.push(`- …and ${p.drift.length - MAX_ITEMS} more`);
     if (items.length) body.push({ type: 'TextBlock', wrap: true, text: items.join('\r') });
-    const extra = [pendingText(p.pending), p.lastApply ? `Last applied by ${at({ name: p.lastApply.user, github: p.lastApply.user })} via PR #${p.lastApply.pr}` : ''].filter(Boolean);
+    const extra = [pendingText(p.pending), p.lastApply ? `Last applied by ${at({ name: p.lastApply.user, github: p.lastApply.user })} via PR #${p.lastApply.pr}` : '', p.fixPr ? `[Fix PR](${p.fixPr})` : p.fixNote ?? ''].filter(Boolean);
     if (extra.length) body.push({ type: 'TextBlock', wrap: true, isSubtle: true, text: extra.join(' · ') });
   }
   const card = {
@@ -211,6 +217,7 @@ export const plainText = (r: DriftReport, mention: (id: Identity) => string, lim
     const pending = pendingText(p.pending);
     if (pending) lines.push(pending);
     if (p.lastApply) lines.push(`Last applied by ${mention({ name: p.lastApply.user, github: p.lastApply.user })} via PR #${p.lastApply.pr}`);
+    if (fixText(p)) lines.push(fixText(p));
   }
   const text = lines.join('\n');
   return text.length > limit ? `${text.slice(0, limit - 20)}\n…(truncated)` : text;
@@ -270,6 +277,76 @@ export const notifyAll = async (names: string[], channels: Record<string, Channe
       results.push({ channel: name, ok: true });
     } catch (err) {
       log.warn('notification failed', { channel: name, err });
+      results.push({ channel: name, ok: false, error: (err as Error).message });
+    }
+  }
+  return results;
+};
+
+// ---- plain messages (emergency access, weekly summary) -------------------------
+
+export interface TextMessage {
+  title: string;
+  lines: string[];            // markdown: `code` and **bold**
+  event: string;              // for webhook channels, e.g. "teriac.summary"
+  data?: unknown;             // machine-readable details for webhook channels
+  url?: string;
+}
+
+const trim = (s: string, n: number) => (s.length > n ? `${s.slice(0, n - 20)}\n…(truncated)` : s);
+
+export const sendText = async (name: string, channel: ChannelConfig, msg: TextMessage, ctx: NotifyContext): Promise<void> => {
+  const f = ctx.fetchImpl ?? fetch;
+  const body = msg.lines.join('\n');
+  const link = msg.url ? `\n${msg.url}` : '';
+  switch (channel.type) {
+    case 'slack': {
+      // Slack's mrkdwn: *bold*, `code`.
+      const text = trim(`*${msg.title}*\n${body.replace(/\*\*(.+?)\*\*/g, '*$1*')}${link}`, 3900);
+      const token = channel.token_env ? secret(ctx.env, channel.token_env, `channel ${name}`) : null;
+      if (token && channel.channel) {
+        const out = JSON.parse(await post(f, 'https://slack.com/api/chat.postMessage', { channel: channel.channel, text, unfurl_links: false }, { Authorization: `Bearer ${token}` }));
+        if (!out.ok) throw new Error(`Slack: ${out.error}`);
+      } else {
+        await post(f, secret(ctx.env, channel.webhook_url_env, `channel ${name}`), { text });
+      }
+      return;
+    }
+    case 'teams': {
+      const card = {
+        $schema: 'http://adaptivecards.io/schemas/adaptive-card.json', type: 'AdaptiveCard', version: '1.4',
+        body: [
+          { type: 'TextBlock', size: 'Large', weight: 'Bolder', wrap: true, text: msg.title },
+          ...msg.lines.slice(0, 40).map(l => ({ type: 'TextBlock', wrap: true, spacing: 'Small', text: l })),
+        ],
+        actions: msg.url ? [{ type: 'Action.OpenUrl', title: 'Open in teriac', url: msg.url }] : [],
+        msteams: { width: 'Full' },
+      };
+      await post(f, secret(ctx.env, channel.webhook_url_env, `channel ${name}`), { type: 'message', attachments: [{ contentType: 'application/vnd.microsoft.card.adaptive', contentUrl: null, content: card }] });
+      return;
+    }
+    case 'discord':
+      await post(f, secret(ctx.env, channel.webhook_url_env, `channel ${name}`), { content: trim(`**${msg.title}**\n${body}${link}`, 1900), allowed_mentions: { parse: [] } });
+      return;
+    case 'googlechat':
+      await post(f, secret(ctx.env, channel.webhook_url_env, `channel ${name}`), { text: trim(`*${msg.title}*\n${body.replace(/\*\*(.+?)\*\*/g, '*$1*')}${link}`, 4000) });
+      return;
+    case 'webhook':
+      await post(f, secret(ctx.env, channel.webhook_url_env, `channel ${name}`), { event: msg.event, title: msg.title, lines: msg.lines, url: msg.url, data: msg.data ?? null });
+      return;
+  }
+};
+
+export const notifyText = async (names: string[], channels: Record<string, ChannelConfig>, msg: TextMessage, ctx: NotifyContext) => {
+  const results: { channel: string; ok: boolean; error?: string }[] = [];
+  for (const name of names) {
+    const channel = channels[name];
+    if (!channel) { results.push({ channel: name, ok: false, error: 'no such channel' }); continue; }
+    try {
+      await sendText(name, channel, msg, ctx);
+      results.push({ channel: name, ok: true });
+    } catch (err) {
+      log.warn('notification failed', { channel: name, event: msg.event, err });
       results.push({ channel: name, ok: false, error: (err as Error).message });
     }
   }

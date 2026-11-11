@@ -217,6 +217,12 @@ a.tile:hover .k { color: var(--accent); }
 .f input, .f select { font: 13.5px var(--font); padding: 7px 9px; border: 1px solid var(--line); border-radius: 6px;
   background: var(--bg); color: var(--ink); min-width: 0; max-width: 100%; }
 .f input[type="search"] { width: 100%; }
+.f.checks { border: 0; padding: 0; margin: 0; }
+.f.checks > div { display: flex; flex-wrap: wrap; gap: 6px 14px; font-size: 13.5px; padding: 6px 0; }
+.f.checks label { display: inline-flex; gap: 6px; align-items: center; white-space: nowrap; }
+form.grant { margin-bottom: 16px; }
+form.grant button[type="submit"] { background: var(--bad); color: #fff; border-color: var(--bad); }
+.pad-b { height: 14px; }
 .f select { max-width: 200px; }
 .f .dates { display: flex; gap: 6px; align-items: center; color: var(--muted); }
 .seg { display: inline-flex; border: 1px solid var(--line); border-radius: 6px; overflow: hidden; flex-wrap: wrap; }

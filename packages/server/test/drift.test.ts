@@ -17,7 +17,7 @@ let tmp: string;
 let origin: string;
 let store: Store;
 let sent: { url: string; body: any }[];
-let mode: 'drift' | 'clean' | 'broken';
+let mode: 'drift' | 'clean' | 'broken' | 'update';
 let drift: DriftScheduler;
 
 const FAKE_TF = `#!/usr/bin/env node
@@ -31,12 +31,13 @@ if (cmd === 'plan') {
   if (!rest.includes('-lock=false')) { console.error('drift plans must not lock'); process.exit(1); }
   const refresh = rest.includes('-refresh-only');
   const out = rest.find(a => a.startsWith('-out=')).slice(5);
-  fs.writeFileSync(out, refresh && mode === 'drift' ? 'drift' : 'clean');
-  process.exit(refresh && mode === 'drift' ? 2 : 0);
+  const drifted = refresh && (mode === 'drift' || mode === 'update');
+  fs.writeFileSync(out, drifted ? mode : 'clean');
+  process.exit(drifted ? 2 : 0);
 }
 if (cmd === 'show') {
   const kind = fs.readFileSync(rest[rest.length - 1], 'utf-8');
-  process.stdout.write(fs.readFileSync(path.join(F, kind === 'drift' ? 'plan-drift.json' : 'plan-nochange.json')));
+  process.stdout.write(fs.readFileSync(path.join(F, kind === 'drift' ? 'plan-drift.json' : kind === 'update' ? 'plan-drift-update.json' : 'plan-nochange.json')));
   process.exit(0);
 }
 process.exit(1);
@@ -89,8 +90,13 @@ repos:
       - name: nightly
         projects: [envs/prod]
         schedule: "0 6 * * 1-5"
-        timezone: Europe/Berlin
+        timezone: Europe/Madrid
         notify: [alerts]
+      - name: fixer
+        projects: [envs/prod]
+        schedule: "30 6 * * *"
+        notify: [alerts]
+        fix_pr: true
 `);
   const config: ServerConfig = {
     port: 0, dataDir: join(tmp, 'data'), publicUrl: 'https://teriac.example.com', parallelism: 2, runTimeoutMs: 60_000,
@@ -108,6 +114,7 @@ repos:
     listRepos: async () => [repo, { ...repo, fullName: 'stranger/repo', owner: 'stranger', name: 'repo' }],
     fileAt: async (_r: Repo, f: string) => (f === 'teriac.yaml' ? REPO_TERIAC_YAML : null),
     cloneAuth: async () => ({ url: origin }),
+    openPullRequest: async (_r: Repo, p: any) => { opened.push(p); return opened.length === 1 ? 'https://github.com/acme/infra/pull/77' : null; },
   };
   drift = new DriftScheduler({
     config, store, adapters: [adapter], resolver, limited: <T>(fn: () => Promise<T>) => fn(), fetchImpl,
@@ -121,11 +128,13 @@ after(() => {
 });
 
 const nightly = () => drift.schedules.find(e => e.spec.name === 'nightly')!;
+const opened: any[] = [];
 
 test('loads server and repo schedules; skips unknown channels and unlisted repos', async () => {
   await drift.refresh();
   assert.deepEqual(drift.schedules.map(e => e.key).sort(), [
     'repo:github.com/acme/infra:main:from-repo',
+    'server:github.com/acme/infra:main:fixer',
     'server:github.com/acme/infra:main:nightly',
   ]);
   assert.equal(drift.next(nightly(), new Date('2026-11-07T20:00:00Z'))?.toISOString(), '2026-11-09T05:00:00.000Z');
@@ -168,4 +177,31 @@ test('errors are reported to the channel', async () => {
   assert.match(JSON.stringify(sent[0].body), /Drift check failed in acme\/infra/);
   const history = store.recentDrift(10) as { status: string }[];
   assert.equal(history[0].status, 'error');
+});
+
+test('fix_pr: a PR updates plain values in the code; the notification links it; a second run does not duplicate it', async () => {
+  sent.length = 0;
+  mode = 'update';
+  const fixer = drift.schedules.find(e => e.spec.name === 'fixer')!;
+  const r = await drift.run(fixer);
+  const p = r.report.projects[0];
+  assert.equal(p.fixPr, 'https://github.com/acme/infra/pull/77');
+  assert.equal(opened.length, 1);
+  assert.deepEqual([opened[0].base, opened[0].branch, opened[0].title], ['main', 'teriac/drift-fix/envs_prod', 'Accept drift in envs/prod']);
+  assert.equal(opened[0].files.length, 1);
+  assert.match(opened[0].files[0].content, /content  = "all systems go"/);
+  assert.match(opened[0].files[0].content, /content  = "1"/, 'only the drifted value changes');
+  assert.match(opened[0].body, /`local_file\.motd` · `content`: "maintenance" → "all systems go"/);
+  assert.match(opened[0].body, /`local_file\.app_config`: deleted outside Terraform/);
+  assert.match(JSON.stringify(sent[0].body), /<https:\/\/github\.com\/acme\/infra\/pull\/77\|Fix PR>/);
+  assert.ok(store.auditLog(5).some(a => a.action === 'drift_fix_pr' && /opened/.test(a.reason)));
+  const again = await drift.run(fixer);
+  assert.match(again.report.projects[0].fixNote ?? '', /already open \(branch `teriac\/drift-fix\/envs_prod`\)/);
+});
+
+test('fix_pr off (the default): no PR', async () => {
+  const before = opened.length;
+  mode = 'update';
+  await drift.run(nightly());
+  assert.equal(opened.length, before);
 });

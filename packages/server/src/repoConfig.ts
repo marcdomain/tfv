@@ -7,6 +7,7 @@ import YAML from 'yaml';
 import type { ApprovalRule, ProjectRule, Requirement, Action, Principal, DriftSchedule } from './config.ts';
 import { REQUIREMENTS, validateDrift } from './config.ts';
 import type { Provider } from './teriac.ts';
+import { validateStaleBase, type StaleBaseMode } from './safety-config.ts';
 
 export interface ProjectConfig {
   name?: string;
@@ -30,6 +31,9 @@ export interface RepoConfig {
   rules: ProjectRule[];           // tighten-only rules from the repo
   drift: DriftSchedule[];         // scheduled drift checks (teriac.yaml only)
   require_apply_project: boolean; // a repo can turn this on, never off
+  reapprove_on_change?: boolean;  // a repo can turn this on, never off
+  keep_approval_on_rebase?: boolean; // a repo can turn this off, never on
+  stale_base?: StaleBaseMode;     // a repo can make this stricter
   warnings: string[];
 }
 
@@ -78,6 +82,10 @@ const parseConfig = (doc: Record<string, any>): RepoConfig => {
     rules,
     drift: validateDrift(doc.drift, 'drift'),
     require_apply_project: doc.require_apply_project === true,
+    // Tighten-only: teriac.yaml can ask for fresh approvals and stricter base checks, never loosen them.
+    reapprove_on_change: doc.reapprove_on_change === true ? true : undefined,
+    keep_approval_on_rebase: doc.keep_approval_on_rebase === false ? false : undefined,
+    stale_base: validateStaleBase(doc.stale_base, 'stale_base'),
     warnings,
   };
 };

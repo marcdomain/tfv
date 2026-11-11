@@ -85,6 +85,7 @@ HttpOnly cookies. The chart generates the signing key once and keeps it across u
 | `config.commentMode` | `new` | `new`: a new comment for each plan and apply. `update`: one comment at the top, edited in place |
 | `config.parallelism` | `4` | Plans and applies running at once, shared fairly between PRs |
 | `config.preinstall` | `[]` | e.g. `[terraform@1.9.8, tofu@1.8.5]` |
+| `config.verifySignatures` | `true` | Check the vendor's signature on downloaded Terraform, OpenTofu and Terragrunt; `false` for mirrors without `.sig` files |
 | `repos` | `{}` | Full `repos.yaml`: rules, approvers, channels, people, drift schedules |
 | `extraEnvFrom` / `extraEnv` | `[]` | Cloud credentials, `TERIAC_SLACK_TOKEN`, `TERIAC_TEAMS_WEBHOOK`, `GITHUB_TOKEN` (for OpenTofu/Terragrunt downloads), … |
 | `serviceAccount.annotations` | `{}` | Workload identity: IRSA, GKE, Azure |
@@ -109,13 +110,14 @@ repos:
             force_unlock: []             # single commands can be set too; [] = nobody
           approvals: [{ from: team:platform-admins, count: 2 }]
       drift:
-        - { name: prod-nightly, projects: ["prod/**"], schedule: "0 6 * * 1-5", timezone: Europe/Berlin, notify: [infra-alerts] }
+        - { name: prod-nightly, projects: ["prod/**"], schedule: "0 6 * * 1-5", timezone: Europe/Madrid, notify: [infra-alerts] }
 extraEnvFrom:
   - secretRef: { name: teriac-chat-tokens }   # holds TERIAC_SLACK_TOKEN
 ```
 
-Policy checks, the two-person rule and permissions for Terraform commands (`state rm`,
-`import`, …) go in the same `repos` value; see the
+Policy checks, the two-person rule, permissions for Terraform commands (`state rm`, `import`, …)
+and the safety settings (`risk`, `freezes`, `protected`, `secret_scan`, `break_glass`, `summary`,
+`keep_approval_on_rebase`, `stale_base`) go in the same `repos` value; see the
 [server README](../../packages/server/README.md#rules-reposyaml).
 
 ## How it runs

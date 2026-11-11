@@ -2,7 +2,7 @@
 // No SDK: App JWTs are signed with node:crypto and the REST API is plain fetch.
 import { createHmac, createSign, timingSafeEqual } from 'node:crypto';
 import type {
-  CheckRun, CloneAuth, Permission, PullRequest, PullRequestState, Reaction, Repo, Review, VcsAdapter, VcsEvent,
+  CheckRun, CloneAuth, Comparison, Permission, PullRequest, PullRequestState, Reaction, Repo, Review, VcsAdapter, VcsEvent,
 } from './types.ts';
 import type { GitHubConfig } from '../config.ts';
 import { addSecret, log } from '../log.ts';
@@ -310,7 +310,20 @@ export class GitHubAdapter implements VcsAdapter {
       output: { title: check.title.slice(0, 250), summary: check.summary, text: check.text },
       actions: check.actions,
     };
+    // GitHub takes up to 50 annotations per request.
+    if (check.annotations?.length) {
+      (body.output as Record<string, unknown>).annotations = check.annotations.slice(0, 50).map(a => ({
+        path: a.path, start_line: a.startLine, end_line: a.endLine, annotation_level: a.level,
+        title: a.title.slice(0, 255), message: a.message.slice(0, 64000),
+      }));
+    }
     if (check.status === 'completed') body.conclusion = check.conclusion;
+    // A plan or apply starting gets a fresh check run. GitHub adds annotations to those a
+    // run already has, so reusing one would repeat the notes on every re-plan.
+    if (check.status !== 'completed') {
+      const { data: created } = await this.api(repo, 'POST', `/repos/${repo.fullName}/check-runs`, body);
+      return created?.html_url ?? null;
+    }
     const { data } = await this.api(repo, 'GET',
       `/repos/${repo.fullName}/commits/${check.headSha}/check-runs?check_name=${encodeURIComponent(check.name)}&filter=latest`);
     const existing = data.check_runs?.find((c: any) => c.app?.id === Number(this.cfg.appId)) ?? data.check_runs?.[0];
@@ -347,6 +360,39 @@ export class GitHubAdapter implements VcsAdapter {
       APPROVED: 'approved', CHANGES_REQUESTED: 'changes_requested', COMMENTED: 'commented', DISMISSED: 'dismissed',
     };
     return list.filter(r => states[r.state] && r.user).map(r => ({ user: r.user.login, state: states[r.state], commitSha: r.commit_id }));
+  }
+
+  async compare(repo: Repo, base: string, head: string): Promise<Comparison | null> {
+    const { status, data } = await this.api(repo, 'GET',
+      `/repos/${repo.fullName}/compare/${encodeURIComponent(base)}...${encodeURIComponent(head)}?per_page=100`, undefined, [404, 422]);
+    if (status !== 200 || !data) return null;
+    const files = (data.files ?? []) as any[];
+    return {
+      files: files.map(f => ({ path: f.filename, status: f.status, blob: f.sha ?? null, previous: f.previous_filename })),
+      commits: ((data.commits ?? []) as any[]).map(c => {
+        const message = String(c.commit?.message ?? '').split('\n')[0];
+        const pr = message.match(/\(#(\d+)\)$|Merge pull request #(\d+)/);
+        return { sha: c.sha, message, author: c.author?.login ?? c.commit?.author?.name ?? 'someone', pr: pr ? Number(pr[1] ?? pr[2]) : undefined };
+      }),
+      // GitHub lists at most 300 files.
+      truncated: files.length >= 300,
+    };
+  }
+
+  async openPullRequest(repo: Repo, pr: { base: string; branch: string; title: string; body: string; files: { path: string; content: string }[] }): Promise<string | null> {
+    const ref = await this.api(repo, 'GET', `/repos/${repo.fullName}/git/ref/heads/${pr.branch.split('/').map(encodeURIComponent).join('/')}`, undefined, [404]);
+    if (ref.status === 200) return null;
+    const { data: baseRef } = await this.api(repo, 'GET', `/repos/${repo.fullName}/git/ref/heads/${encodeURIComponent(pr.base)}`);
+    const baseSha = baseRef.object.sha;
+    const { data: baseCommit } = await this.api(repo, 'GET', `/repos/${repo.fullName}/git/commits/${baseSha}`);
+    const { data: tree } = await this.api(repo, 'POST', `/repos/${repo.fullName}/git/trees`, {
+      base_tree: baseCommit.tree.sha,
+      tree: pr.files.map(f => ({ path: f.path, mode: '100644', type: 'blob', content: f.content })),
+    });
+    const { data: commit } = await this.api(repo, 'POST', `/repos/${repo.fullName}/git/commits`, { message: pr.title, tree: tree.sha, parents: [baseSha] });
+    await this.api(repo, 'POST', `/repos/${repo.fullName}/git/refs`, { ref: `refs/heads/${pr.branch}`, sha: commit.sha });
+    const { data: opened } = await this.api(repo, 'POST', `/repos/${repo.fullName}/pulls`, { title: pr.title, head: pr.branch, base: pr.base, body: pr.body });
+    return opened?.html_url ?? null;
   }
 
   async fileAt(repo: Repo, path: string, ref: string): Promise<string | null> {

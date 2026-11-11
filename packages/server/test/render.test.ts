@@ -12,7 +12,7 @@ const noChange = summarizePlan(JSON.parse(fixture('plan-nochange.json')));
 const run = (over: Partial<Run>): Run => ({
   id: 1, repo: 'github.com/acme/infra', pr: 7, project: 'envs/prod', workspace: 'default', kind: 'plan',
   status: 'success', headSha: 'abc1234def', user: 'bob', startedAt: '', finishedAt: '', engine: 'terraform 1.9.8',
-  summary: JSON.stringify(changes), output: fixture('plan-changes.txt'), planPath: '/x', hasChanges: true, destroys: 2, targets: [], prAuthor: 'bob', dir: 'envs/prod', policy: null, mocks: [], providers: [], usage: null, applied: null, ...over,
+  summary: JSON.stringify(changes), output: fixture('plan-changes.txt'), planPath: '/x', hasChanges: true, destroys: 2, targets: [], prAuthor: 'bob', dir: 'envs/prod', policy: null, mocks: [], providers: [], usage: null, applied: null, planSha: null, risk: null, secrets: [], ...over,
 });
 
 test('summarizes a real terraform plan', () => {
@@ -49,7 +49,7 @@ test('comment: caution banner, table, details, footer', () => {
   assert.ok(body.startsWith('<!-- teriac:summary -->'));
   assert.match(body, /### 🔴 teriac · 4 projects · `abc1234`/);
   assert.match(body, /> \[!CAUTION\]\n> \*\*2 resources will be destroyed or replaced\*\*/);
-  assert.match(body, /> \[!CAUTION\]\n> \*\*2 resources will be destroyed or replaced\*\*\n> - `envs\/prod`: 1 to destroy · 1 to replace\n/);
+  assert.match(body, /> \[!CAUTION\]\n> \*\*2 resources will be destroyed or replaced\*\*\n/);
   assert.doesNotMatch(body.split('| Project |')[0], /terraform_data\.legacy_queue/, 'resources are listed once, in the project section');
   assert.match(body, /\| `envs\/prod` \| terraform 1\.9\.8 \| ⚠️ \*\*\+3 ~1 ±1 −1\*\* \| 🔒 1 more approval from team:platform-admins \|/);
   assert.match(body, /\| `envs\/dev` \| terraform 1\.9\.8 \| ✅ no changes \| — \|/);
@@ -118,11 +118,22 @@ test('applying every ready project is offered in the footer only, where the serv
   assert.match(strict, /Apply one project at a time: `teriac apply -p <project>`/);
 });
 
-test('commands are in code blocks (GitHub adds a copy button)', () => {
+test('a ready project: the table has ▶ Apply; the section does not repeat it', () => {
   const body = renderComment({ marker: 'M', headSha: 'abc1234', command: 'teriac', limit: 65000, projects: [{ name: 'infra/dev', plan: run({ project: 'infra/dev', destroys: 0 }), blockers: [], checkUrl: 'https://github.com/x/runs/1' }] });
-  assert.match(body, /\*\*To apply:\*\* comment this, or \[\*\*▶ Apply\*\*\]\([^)]+\):\n```\nteriac apply -p infra\/dev\n```/);
-  assert.doesNotMatch(body, /is ready to apply/, 'the table and section already say so');
-  assert.equal(body.split('teriac apply -p infra/dev').length - 1, 1, 'the command is shown once, in the project section');
+  assert.match(body, /\| 🟢 ready · \[\*\*▶ Apply\*\*\]\(https:\/\/github\.com\/x\/runs\/1\) \|/);
+  assert.doesNotMatch(body, /\*\*To apply|is ready to apply/);
+});
+
+test('risk: "None" in the table when nothing is risky; otherwise the level, with the reasons in the dropdown', () => {
+  const low = renderComment({ marker: 'M', headSha: 'abc1234', command: 'teriac', limit: 65000, projects: [{ name: 'a', plan: run({ project: 'a', risk: { level: 'low', reasons: [] } }), blockers: [] }] });
+  assert.match(low, /\| Risk \|/);
+  assert.match(low, /\| None \|/);
+  assert.doesNotMatch(low, /\*\*Risk:/);
+  const high = renderComment({ marker: 'M', headSha: 'abc1234', command: 'teriac', limit: 65000, projects: [{ name: 'a', plan: run({ project: 'a', risk: { level: 'high', reasons: ['destroys or replaces 2 resources in production'] } }), blockers: [] }] });
+  assert.match(high, /\| 🟠 High \|/);
+  const section = high.slice(high.indexOf('<details'));
+  assert.match(section, /\*\*Risk: 🟠 High\*\* · destroys or replaces 2 resources in production/);
+  assert.doesNotMatch(high.slice(0, high.indexOf('<details')), /destroys or replaces 2 resources in production/, 'reasons only in the dropdown');
 });
 
 test('apply report: real result, past tense, outputs, apply log only', async () => {

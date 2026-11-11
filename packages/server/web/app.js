@@ -38,6 +38,8 @@
     return `${Math.floor(s / 86400)} d ago`;
   };
   const when = (iso) => (iso ? new Date(iso).toLocaleString() : '');
+  const hoursPlain = (h) => (h === null || h === undefined ? '—' : h < 1 ? `${Math.round(h * 60)} min` : h < 48 ? `${Math.round(h * 10) / 10} h` : `${Math.round(h / 2.4) / 10} days`);
+  const hoursText = (h) => (h === null || h === undefined ? '—' : h < 1 ? `${Math.round(h * 60)}<small>min</small>` : h < 48 ? `${Math.round(h * 10) / 10}<small>h</small>` : `${Math.round(h / 2.4) / 10}<small>days</small>`);
   const duration = (a, b) => {
     if (!a || !b) return '';
     const s = Math.round((Date.parse(b) - Date.parse(a)) / 1000);
@@ -476,6 +478,41 @@
         }), 'No projects are locked.')}</div>`;
     },
 
+    async access() {
+      const g = await api('/api/grants');
+      const PERMS = [['apply', 'apply'], ['apply_destroy', 'apply with destroys'], ['unlock', 'unlock'], ['state_write', 'import / taint'], ['state_remove', 'state rm / mv']];
+      const SKIPS = [['approvals', 'approvals'], ['freeze', 'change freezes'], ['protected', 'protected resources'], ['policy', 'enforced policies']];
+      const status = (x) => x.revokedAt ? '<span class="pill">revoked</span>' : Date.parse(x.expiresAt) <= Date.now() ? '<span class="pill">expired</span>' : '<span class="pill bad">active</span>';
+      const scope = (x) => `${x.actions.map(a => `<span class="pill">${esc(a)}</span>`).join(' ')} <span class="muted">on</span> <span class="mono">${x.projects.length ? x.projects.map(esc).join(', ') : 'every project'}</span>${x.repo !== '*' ? ` <span class="muted">in ${esc(x.repo)}</span>` : ''}`;
+      const canRevoke = g.canGrant || isAdmin();
+      const row = (x, live) => `<tr>
+          <td class="mono">#${x.id}</td><td><b>${esc(x.user)}</b></td><td class="wrap">${scope(x)}</td>
+          <td>${x.bypass.length ? x.bypass.map(b => `<span class="pill warn">${esc(b)}</span>`).join(' ') : '<span class="muted">—</span>'}</td>
+          <td class="wrap">${esc(x.reason)}</td><td>${esc(x.grantedBy)}</td>
+          <td title="${esc(when(x.expiresAt))}">${live ? `ends ${esc(new Date(x.expiresAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }))}` : status(x)}</td>
+          <td class="muted">${x.usedAt ? `used ${esc(ago(x.usedAt))}` : 'not used'}</td>
+          <td>${live && canRevoke ? `<button class="ghost small" type="button" data-revoke="${x.id}" data-user="${esc(x.user)}">Revoke</button>` : ''}</td>
+        </tr>`;
+      const form = g.canGrant ? `
+        <form class="filters grant" autocomplete="off">
+          <label class="f"><span>For (username)</span><input id="g-user" name="user" required placeholder="e.g. octocat"></label>
+          <label class="f"><span>Repository</span><input id="g-repo" name="repo" placeholder="all, or github.com/acme/infra"></label>
+          <label class="f grow"><span>Projects</span><input id="g-projects" name="projects" placeholder="all, or prod/**, envs/prod"></label>
+          <label class="f"><span>Hours</span><input id="g-hours" name="hours" type="number" min="1" max="${g.maxHours}" value="1" required></label>
+          <fieldset class="f checks"><span>Permissions</span><div>${PERMS.map(([v, l], i) => `<label><input type="checkbox" name="actions" value="${v}" ${i === 0 ? 'checked' : ''}> ${esc(l)}</label>`).join('')}</div></fieldset>
+          <fieldset class="f checks"><span>May skip</span><div>${SKIPS.map(([v, l]) => `<label><input type="checkbox" name="bypass" value="${v}"> ${esc(l)}</label>`).join('')}</div></fieldset>
+          <label class="f grow"><span>Reason (goes to the audit log)</span><input id="g-reason" name="reason" required minlength="10" placeholder="e.g. INC-1234: roll back the broken load balancer"></label>
+          <button type="submit">Grant access</button>
+        </form>` : '';
+      return `
+        <div class="page-head"><h1>Access</h1><span class="muted">Emergency access: a permission for a few hours, removed automatically</span></div>
+        ${!g.enabled ? `<div class="card"><div class="empty">Emergency access is off. Add <code>break_glass:</code> with <code>grantors</code> to repos.yaml to turn it on.</div></div>` : form || '<div class="card"><div class="empty">You can see grants here. Only grantors (break_glass.grantors in repos.yaml) can give access.</div></div>'}
+        <div class="card"><div class="card-head"><h2>Active</h2><span class="muted small">${fmtN(g.active.length)}</span></div>
+          ${table(['', 'For', 'Permission', 'Skips', 'Reason', 'Granted by', 'Expires', 'Used', ''], g.active.map(x => row(x, true)), 'Nobody has emergency access right now.')}</div>
+        <div class="card"><div class="card-head"><h2>History</h2></div>
+          ${table(['', 'For', 'Permission', 'Skips', 'Reason', 'Granted by', 'Status', 'Used', ''], g.recent.map(x => row(x, false)), 'No emergency access has been given.')}</div>`;
+    },
+
     async drift() {
       const [schedules, drift] = await Promise.all([api('/api/drift/schedules'), api('/api/drift')]);
       const latest = new Map();
@@ -586,6 +623,17 @@
           ${tile(secsText(m.timing.apply.p50), 'median apply time', `p95 ${secsText(m.timing.apply.p95)}`)}
           ${tile(fmt(t.prs), 'pull requests', `${fmt(t.users)} people · ${fmt(t.projects)} projects`)}
         </div>
+        ${(() => {
+          const d = m.delivery;
+          if (!d) return '';
+          return `<div class="card"><div class="card-head"><h2>Delivery</h2><span class="muted small">how fast and how safely changes reach infrastructure</span></div>
+            <div class="tiles hero inner">
+              ${tile(hoursText(d.leadTime.p50), 'median PR to applied', d.leadTime.count ? `p90 ${hoursPlain(d.leadTime.p90)} · ${fmt(d.leadTime.count)} changes` : 'no applies yet')}
+              ${tile(d.failureRate === null ? '—' : `${d.failureRate}<small>%</small>`, 'applies that failed', `${fmt(d.applies)} applies`, listLink('runs', { kind: 'apply', status: 'failed' }), d.failureRate > 15 ? 'bad' : '')}
+              ${tile(hoursText(d.recovery.p50), 'median time to fix a failed apply', `${fmt(d.recovery.count)} fixed`)}
+              ${tile(fmt(d.appliesPerWeek), 'applies per week', `over ${esc(period)}`)}
+            </div><div class="pad-b"></div></div>`;
+        })()}
         <div class="card viz">
           <div class="card-head"><h2>Runs per day</h2><span class="muted small">hover a day for details</span></div>
           <div class="legend"><span><i class="key s1"></i>Plans</span><span><i class="key s2"></i>Applies</span></div>
@@ -937,7 +985,29 @@
     try { localStorage.setItem('teriac-page-size', e.target.value); } catch { /* ignore */ }
     setParams(name, params, name === 'projects');
   });
-  view.addEventListener('submit', (e) => { if (e.target.closest('form.filters')) e.preventDefault(); });
+  view.addEventListener('submit', async (e) => {
+    const grant = e.target.closest('form.grant');
+    if (grant) {
+      e.preventDefault();
+      const f = new FormData(grant);
+      const body = {
+        user: f.get('user'), repo: f.get('repo'), projects: f.get('projects'), hours: Number(f.get('hours')), reason: f.get('reason'),
+        actions: f.getAll('actions'), bypass: f.getAll('bypass'),
+      };
+      const btn = grant.querySelector('button[type="submit"]');
+      btn.disabled = true;
+      try {
+        const g = await api('/api/grants', { method: 'POST', body: JSON.stringify(body) });
+        toast(`Granted emergency access #${g.id} to ${g.user} until ${new Date(g.expiresAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}.`);
+        return route();
+      } catch (err) {
+        toast(`Could not grant access: ${err.message}`, true);
+        btn.disabled = false;
+      }
+      return;
+    }
+    if (e.target.closest('form.filters')) e.preventDefault();
+  });
 
   view.addEventListener('click', async (e) => {
     const row = e.target.closest('tr[data-run]');
@@ -1032,6 +1102,22 @@
         toast(r.notified ? `Unlocked ${l.project}. PR #${l.pr} was told.` : `Unlocked ${l.project}. Could not comment on PR #${l.pr}; see the server log.`, !r.notified);
       } catch (err) {
         toast(`Could not unlock: ${err.message}`, true);
+      }
+      return route();
+    }
+    const revoke = e.target.closest('button[data-revoke]');
+    if (revoke) {
+      const ok = await confirmDialog({
+        title: `Revoke emergency access #${esc(revoke.dataset.revoke)}?`,
+        body: `<p>${esc(revoke.dataset.user)} loses this access now. This is recorded in the audit log and the channels are told.</p>`,
+        ok: 'Revoke', danger: true,
+      });
+      if (!ok) return;
+      try {
+        await api(`/api/grants/${encodeURIComponent(revoke.dataset.revoke)}/revoke`, { method: 'POST' });
+        toast(`Revoked emergency access #${revoke.dataset.revoke}.`);
+      } catch (err) {
+        toast(`Could not revoke: ${err.message}`, true);
       }
       return route();
     }

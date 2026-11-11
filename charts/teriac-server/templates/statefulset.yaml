@@ -93,6 +93,8 @@ spec:
               value: {{ .Values.config.drift | quote }}
             - name: TERIAC_LOG_LEVEL
               value: {{ .Values.config.logLevel | quote }}
+            - name: TERIAC_VERIFY_SIGNATURES
+              value: {{ .Values.config.verifySignatures | quote }}
             {{- with .Values.config.preinstall }}
             - name: TERIAC_PREINSTALL
               value: {{ join "," . | quote }}

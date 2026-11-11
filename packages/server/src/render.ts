@@ -1,5 +1,8 @@
 // Turns plan JSON (`terraform show -json`) into PR comments and check runs.
 import type { Run } from './store.ts';
+import { RISK_BADGE } from './risk.ts';
+import { secretNote } from './secrets.ts';
+import type { RiskLevel } from './safety-config.ts';
 
 export type ChangeAction = 'create' | 'update' | 'delete' | 'replace' | 'import' | 'forget' | 'move';
 
@@ -151,7 +154,15 @@ export interface ProjectView {
   dir?: string;               // project folder, for links
   checkUrl?: string | null;   // the project's check page, where the Apply button is
   applyBy?: string;           // e.g. "someone other than bob" (two-person rule)
+  warnings?: string[];        // e.g. the base branch changed this project's files
 }
+
+const riskBadge = (run?: Run) => (run?.risk ? RISK_BADGE[run.risk.level as RiskLevel] ?? run.risk.level : '');
+// A plan with risk: medium, high or critical. Low means nothing risky was found.
+const hasRisk = (run?: Run) => !!run?.risk && run.risk.level !== 'low';
+// The table cell: "None", or the level; the reasons are in the project's dropdown.
+const riskCell = (run?: Run) => (run?.risk ? (hasRisk(run) ? riskBadge(run) : 'None') : '—');
+const riskLine = (run?: Run) => (hasRisk(run) ? `**Risk: ${riskBadge(run)}**${run!.risk!.reasons.length ? ` · ${run!.risk!.reasons.join(' · ')}` : ''}` : '');
 
 interface PolicyView { mode: 'off' | 'audit' | 'enforce'; findings: { rule: string; severity: string; address: string; message: string }[] }
 const policyOf = (run?: Run): PolicyView | null => (run?.policy ? JSON.parse(run.policy) as PolicyView : null);
@@ -177,6 +188,7 @@ export interface CommentInput {
   oneProjectPerApply?: boolean;   // footer advertises `apply -p` only
   links?: CommentLinks;
   approvers?: string[];           // current approvals of the head commit
+  carried?: string[];             // approvals kept across a rebase
 }
 
 // A command in its own code block: GitHub shows a copy button on it.
@@ -228,8 +240,8 @@ const applyCell = (v: ProjectView): string => {
     case 'applied': return '✅ applied';
     case 'apply-failed': return '❌ apply failed';
     case 'none': return '—';
-    case 'blocked': return `🔒 ${v.blockers!.join('; ')}`;
-    case 'ready': return `🟢 ready${applyLink(v)}`;
+    case 'blocked': return `🔒 ${v.blockers!.join('; ')}${v.applyBy ? ` · then ${v.applyBy} applies` : ''}`;
+    case 'ready': return `🟢 ready${v.applyBy ? ` (${v.applyBy} applies)` : ''}${applyLink(v)}`;
   }
 };
 
@@ -253,7 +265,6 @@ export const renderComment = (input: CommentInput): string => {
   const waiting = projects.filter(v => applyState(v) === 'blocked');
   const applied = projects.filter(v => applyState(v) === 'applied');
   const stats = [
-    dangerous.length && `⚠️ ${dangerous.length} to destroy or replace`,
     ready.length && `🟢 ${ready.length} ready to apply`,
     waiting.length && `🔒 ${waiting.length} waiting`,
     applied.length && `✅ ${applied.length} applied`,
@@ -261,6 +272,10 @@ export const renderComment = (input: CommentInput): string => {
     (() => {
       const n = projects.reduce((a, v) => a + (policyOf(v.plan)?.findings.length ?? 0), 0);
       return n ? `🛡️ ${n} policy finding${n === 1 ? '' : 's'}` : '';
+    })(),
+    (() => {
+      const n = projects.filter(v => v.plan?.risk && ['high', 'critical'].includes(v.plan.risk.level)).length;
+      return n ? `🔺 ${n} high risk` : '';
     })(),
   ].filter(Boolean);
   if (stats.length) head.push(`<sub>${stats.join(' · ')}</sub>`);
@@ -273,28 +288,31 @@ export const renderComment = (input: CommentInput): string => {
       if (c.action === 'replace') n.replace++; else n.delete++;
       perProject.set(project, n);
     }
-    for (const [project, n] of perProject) {
-      head.push(`> - \`${project}\`: ${[n.delete && `${n.delete} to destroy`, n.replace && `${n.replace} to replace`].filter(Boolean).join(' · ')}`);
+    if (perProject.size > 1) {
+      for (const [project, n] of perProject) {
+        head.push(`> - \`${project}\`: ${[n.delete && `${n.delete} to destroy`, n.replace && `${n.replace} to replace`].filter(Boolean).join(' · ')}`);
+      }
     }
   }
   for (const w of input.warnings ?? []) head.push('', `> [!WARNING]\n> ${w}`);
 
   const showProviders = projects.some(v => v.plan?.providers?.length);
-  head.push('', `| Project | Engine${showProviders ? ' | Providers' : ''} | Plan | Apply | By |`, `|---|---${showProviders ? '|---' : ''}|---|---|---|`);
+  const showRisk = projects.some(v => v.plan?.risk);
+  head.push('', `| Project | Engine${showProviders ? ' | Providers' : ''} | Plan${showRisk ? ' | Risk' : ''} | Apply | By |`, `|---|---${showProviders ? '|---' : ''}|---${showRisk ? '|---' : ''}|---|---|`);
   for (const v of projects) {
     const name = links && v.plan ? `[\`${v.name}\`](${links.tree(v.plan.headSha, v.dir || v.plan.dir || v.name)})` : `\`${v.name}\``;
     const latest = v.apply && v.plan && v.apply.headSha === v.plan.headSha && v.apply.id > v.plan.id ? v.apply : v.plan;
-    head.push(`| ${name} | ${v.plan?.engine || '—'}${showProviders ? ` | ${providersCell(v.plan?.providers)}` : ''} | ${planCell(v)} | ${applyCell(v)} | ${latest ? personMd(latest.user, links) : '—'} |`);
+    head.push(`| ${name} | ${v.plan?.engine || '—'}${showProviders ? ` | ${providersCell(v.plan?.providers)}` : ''} | ${planCell(v)}${showRisk ? ` | ${v.plan?.status === 'success' ? riskCell(v.plan) : '—'}` : ''} | ${applyCell(v)} | ${latest ? personMd(latest.user, links) : '—'} |`);
   }
 
   if (input.approvers?.length) {
-    head.push('', `**Approved by** ${input.approvers.map(a => personMd(a, links)).join(' · ')}`);
+    const kept = input.carried?.length ? ` <sub>(${input.carried.join(', ')}: kept after a rebase that didn't change the PR's code)</sub>` : '';
+    head.push('', `**Approved by** ${input.approvers.map(a => personMd(a, links)).join(' · ')}${kept}`);
   }
 
   // What needs attention. Ready projects aren't repeated here: the table shows them,
   // with ▶ Apply, and each project's section has its apply command.
   const steps: string[] = [];
-  for (const v of waiting) steps.push(`- 🔒 **\`${v.name}\`** needs ${v.blockers!.join('; ')}`);
   for (const v of projects.filter(x => x.plan?.status === 'failed' && x.plan.mocks?.length)) {
     const deps = v.plan!.mocks;
     steps.push(`- ⏳ **\`${v.name}\`** needs ${deps.map(d => `\`${d}\``).join(', ')} applied first:`, ...deps.flatMap(d => listCmd(`${command} apply -p ${d}`)));
@@ -325,6 +343,9 @@ export const renderComment = (input: CommentInput): string => {
     } else if (v.plan?.mocks?.length) {
       lines.push(`> [!WARNING]\n> **Planned with mock outputs** from ${v.plan.mocks.map(m => `\`${m}\``).join(', ')}, which ${v.plan.mocks.length === 1 ? "isn't" : "aren't"} applied yet. This plan can't be applied: apply ${v.plan.mocks.length === 1 ? 'it' : 'them'} first, and teriac re-plans this project with the real outputs.`, '');
     }
+    for (const w of v.warnings ?? []) lines.push(`> [!WARNING]\n> ${w}`, '');
+    if (v.plan?.secrets?.length) lines.push(`> [!CAUTION]\n> ${secretNote(v.plan.secrets)}`, '');
+    if (v.plan?.status === 'success' && hasRisk(v.plan)) lines.push(riskLine(v.plan), '');
     const pol = policyOf(v.plan);
     if (pol && pol.mode !== 'off') {
       if (pol.findings.length) {
@@ -337,12 +358,6 @@ export const renderComment = (input: CommentInput): string => {
       } else {
         lines.push('🛡️ **Policy:** passed', '');
       }
-    }
-    const by = v.applyBy ? ` (${v.applyBy})` : '';
-    if (applyState(v) === 'ready') {
-      lines.push(`**To apply${by}:** comment this${v.checkUrl ? `, or [**▶ Apply**](${v.checkUrl})` : ''}:`, ...cmdBlock(`${command} apply -p ${v.name}`), '');
-    } else if (applyState(v) === 'blocked') {
-      lines.push(`**To apply${by}:** first ${v.blockers!.join('; ')}. Then comment:`, ...cmdBlock(`${command} apply -p ${v.name}`), '');
     }
     if (v.plan && links?.run) lines.push(`[Open in the teriac dashboard](${links.run(v.plan.id)})`, '');
     if (v.plan?.targets?.length) {
@@ -506,6 +521,8 @@ export const renderCheck = (projectName: string, run: Run, blockers: string[] | 
     const outs = parseApplyOutputs(run.output);
     if (outs) summary.push('', '**Outputs:**', fence(tail(outs, 4000)));
   }
+  if (ok && hasRisk(run)) summary.push('', riskLine(run));
+  if (run.secrets?.length) summary.push('', secretNote(run.secrets));
   const pol = policyOf(run);
   if (pol && pol.mode !== 'off' && pol.findings.length) {
     summary.push('', `🛡️ **Policy (${pol.mode}):** ${pol.findings.length} finding${pol.findings.length === 1 ? '' : 's'}`,

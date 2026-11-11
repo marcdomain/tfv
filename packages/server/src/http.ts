@@ -10,6 +10,7 @@ import { platformForHost } from './links.ts';
 import type { DriftScheduler } from './drift.ts';
 import type { Person } from './config.ts';
 import { presenter } from './present.ts';
+import { isGrantor, parseGrantRequest, announce, grantText, type NotifyDeps } from './grants.ts';
 import { Avatars } from './avatars.ts';
 import {
   type AuthConfig, type Oidc, type Role, type Session, checkLogin, newSession, parseCookies, unsign,
@@ -87,6 +88,7 @@ export interface HttpDeps {
   platforms?: Record<string, Platform>;       // host → platform, for links
   people?: Person[];
   avatars?: Avatars;
+  grants?: NotifyDeps;                        // emergency access (break_glass in repos.yaml)
 }
 
 const defaultLimiter = new RateLimiter(10, 15 * 60_000);
@@ -264,6 +266,41 @@ export const createHttpServer = (deps: HttpDeps): Server => {
         const adapter = deps.adapters[platformForHost(host, deps.platforms ?? {})];
         const notified = await deps.app.dashboardUnlock(adapter, lock, who);
         return send(res, 200, { released: lock, notified });
+      }
+
+      // ---- emergency access ----
+      if (url.pathname === '/api/grants' && req.method === 'GET') {
+        const g = deps.grants;
+        return send(res, 200, {
+          enabled: !!g?.cfg,
+          canGrant: isGrantor(who, g?.cfg),
+          maxHours: g?.cfg?.max_hours ?? 4,
+          active: deps.store.activeGrants(),
+          recent: deps.store.listGrants(50),
+        });
+      }
+      if (url.pathname === '/api/grants' && req.method === 'POST') {
+        const g = deps.grants;
+        if (!g?.cfg) return send(res, 404, { error: 'Emergency access is not set up (break_glass in repos.yaml).' });
+        if (!isGrantor(who, g.cfg)) return send(res, 403, { error: 'You are not allowed to grant emergency access.' });
+        const parsed = parseGrantRequest(JSON.parse((await readBody(req)).toString('utf-8') || '{}'), g.cfg);
+        if ('error' in parsed) return send(res, 400, parsed);
+        const grant = deps.store.createGrant({ ...parsed, grantedBy: `${who.name} (${who.via})`, expiresAt: new Date(Date.now() + parsed.hours * 3_600_000).toISOString() });
+        deps.store.audit({ repo: grant.repo, pr: 0, user: grant.user, action: 'break_glass_granted', project: grant.projects.join(',') || '*', allowed: true, reason: `emergency access #${grant.id} by ${grant.grantedBy} for ${parsed.hours}h: ${grantText(grant)}. Reason: ${grant.reason}` });
+        log.warn('emergency access granted', { id: grant.id, user: grant.user, by: grant.grantedBy, hours: parsed.hours });
+        void announce(g, `🚨 Emergency access #${grant.id} granted to ${grant.user}`, grant, 'teriac.break_glass.granted').catch(() => {});
+        return send(res, 201, grant);
+      }
+      const revoke = /^\/api\/grants\/(\d+)\/revoke$/.exec(url.pathname);
+      if (revoke && req.method === 'POST') {
+        const g = deps.grants;
+        if (!need('admin') && !isGrantor(who, g?.cfg)) return send(res, 403, { error: 'Only admins and grantors can revoke emergency access.' });
+        const grant = deps.store.getGrant(Number(revoke[1]));
+        if (!grant) return send(res, 404, { error: 'no such grant' });
+        if (!deps.store.revokeGrant(grant.id, who.name)) return send(res, 409, { error: 'already revoked' });
+        deps.store.audit({ repo: grant.repo, pr: 0, user: grant.user, action: 'break_glass_revoked', project: grant.projects.join(',') || '*', allowed: true, reason: `emergency access #${grant.id} revoked by ${who.name}` });
+        if (g) void announce(g, `🔒 Emergency access #${grant.id} for ${grant.user} revoked by ${who.name}`, grant, 'teriac.break_glass.revoked').catch(() => {});
+        return send(res, 200, deps.store.getGrant(grant.id));
       }
 
       if (req.method === 'POST' && url.pathname === '/api/drift/run') {

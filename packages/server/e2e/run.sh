@@ -72,11 +72,11 @@ PR="{\"number\":1,\"title\":\"Add dev app\",\"html_url\":\"x\",\"user\":{\"login
 comment() { hook issue_comment "{\"action\":\"created\",\"installation\":{\"id\":1},\"repository\":$REPO,\"issue\":{\"number\":1,\"pull_request\":{}},\"comment\":{\"id\":$1,\"body\":\"$2\",\"user\":{\"login\":\"bob\",\"type\":\"User\"}}}"; }
 
 hook pull_request "{\"action\":\"opened\",\"installation\":{\"id\":1},\"repository\":$REPO,\"pull_request\":$PR}"
-wait_for "autoplan posted the summary comment" "s.comments.some(c => c.body.includes('envs/dev') && c.body.includes('| terraform 1.9.8 | terraform (built-in) | 📝 **+1** | 🟢 ready |') && c.body.includes('**To apply:**') && c.body.includes('teriac apply -p envs/dev'))"
+wait_for "autoplan posted the summary comment" "s.comments.some(c => c.body.includes('envs/dev') && c.body.includes('| terraform 1.9.8 | terraform (built-in) | 📝 **+1** | None | 🟢 ready |') && !c.body.includes('**To apply'))"
 wait_for "check run with an Apply button" "s.checks.some(c => c.name === 'teriac: envs/dev' && c.status === 'completed' && c.actions?.[0]?.identifier === 'apply')"
 
 comment 101 "teriac apply"
-wait_for "bare apply refused (one project at a time)" "s.comments.some(c => c.body.includes('applies one project at a time') && c.body.includes('teriac apply -p envs/dev'))"
+wait_for "bare apply refused (one project at a time)" "s.comments.some(c => c.body.includes('applies one project at a time') && !c.body.includes('**To apply'))"
 
 comment 102 "teriac apply -p envs/dev"
 wait_for "apply succeeded" "s.checks.some(c => c.name === 'teriac: envs/dev' && c.output?.title === 'Applied')"

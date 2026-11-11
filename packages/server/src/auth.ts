@@ -10,6 +10,8 @@ export interface Session {
   role: Role;
   via: 'password' | 'oidc' | 'token';
   exp: number;            // epoch seconds
+  email?: string;         // single sign-on only
+  groups?: string[];      // single sign-on groups (for emergency-access grantors)
 }
 
 export interface DashboardUser {
@@ -201,7 +203,8 @@ export class Oidc {
     }
     const role: Role = groups.some(g => this.cfg.adminGroups.includes(g)) ? 'admin' : 'viewer';
     const name = String(claims.name ?? claims.email ?? claims.preferred_username ?? claims.sub);
-    return { sub: String(claims.sub), name, role, via: 'oidc' };
+    const email = typeof claims.email === 'string' ? claims.email : undefined;
+    return { sub: String(claims.sub), name, role, via: 'oidc', email, groups: groups.slice(0, 50) };
   }
 
   private async key(kid: string | undefined): Promise<Jwk> {

@@ -30,6 +30,8 @@ const { teriac, setDownloadToken } = await import('./teriac.ts');
 const { DriftScheduler } = await import('./drift.ts');
 const { Oidc } = await import('./auth.ts');
 const { Avatars } = await import('./avatars.ts');
+const { GrantWatcher } = await import('./grants.ts');
+const { SummaryScheduler } = await import('./summary.ts');
 
 const store = new Store(join(config.dataDir, 'teriac.db'));
 const app = new App({ config, store, resolver: teriacResolver(config.defaultVersion) });
@@ -56,6 +58,12 @@ for (const c of Object.values(config.channels)) {
   for (const name of [c.token_env, c.webhook_url_env]) if (name) addSecret(process.env[name]);
 }
 
+// Emergency access and the weekly summary share the channel settings.
+const chat = { channels: config.channels, people: config.people, env: process.env, publicUrl: config.publicUrl };
+const grantNotices = { store, cfg: config.breakGlass, ...chat };
+const grants = new GrantWatcher(grantNotices);
+const summary = new SummaryScheduler({ store, cfg: config.summary, ...chat });
+
 let ready = false;
 let stopping = false;
 const server = createHttpServer({
@@ -64,6 +72,7 @@ const server = createHttpServer({
   people: config.people,
   avatars: new Avatars(config.dataDir, config.github ? { [config.github.host]: 'github' } : {}),
   oidc: config.auth.oidc ? new Oidc(config.auth.oidc, config.publicUrl) : undefined,
+  grants: grantNotices,
   ready: () => ready && !stopping,
 });
 addSecret(config.auth.apiToken);
@@ -75,6 +84,8 @@ if (!process.env.TERIAC_SESSION_SECRET && !process.env.TERIAC_SESSION_SECRET_FIL
 server.listen(config.port, () => {
   ready = true;
   if (process.env.TERIAC_DRIFT !== 'false') drift.start();
+  grants.start();
+  summary.start();
   log.info('teriac-server listening', { port: config.port, dataDir: config.dataDir, repos: config.repos.map(r => r.id) });
 });
 
@@ -95,6 +106,8 @@ const shutdown = async (signal: string) => {
   log.info('shutting down; waiting for running jobs', { signal });
   server.close();
   drift.stop();
+  grants.stop();
+  summary.stop();
   await Promise.all([app.idle(), drift.idle()]);
   store.close();
   process.exit(0);

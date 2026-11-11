@@ -4,6 +4,7 @@
 import type { Principal } from './config.ts';
 import { matchGlob } from './glob.ts';
 import { exec } from './runner.ts';
+import { BUILTIN_PACKS, BUILTIN_RULE_NAMES } from './security-rules.ts';
 
 export type PolicyMode = 'off' | 'audit' | 'enforce';
 export type Severity = 'low' | 'medium' | 'high' | 'critical';
@@ -42,6 +43,8 @@ export interface PolicyConfig {
   override?: Principal[];      // may apply despite enforced findings, with --override
   rules?: PolicyRule[];
   commands?: PolicyCommand[];
+  builtin?: string[];          // ready-made rule packs, e.g. [security]
+  disable?: string[];          // built-in rules to skip, by name
 }
 
 export interface Finding {
@@ -67,6 +70,12 @@ export const validatePolicies = (cfg: unknown, where: string): PolicyConfig | un
       if (cond && typeof cond.attribute !== 'string') throw new Error(`${where}.rules[${i}]: conditions need an "attribute"`);
       if (cond?.matches) new RegExp(cond.matches);
     }
+  }
+  for (const p of c.builtin ?? []) {
+    if (!BUILTIN_PACKS.includes(p)) throw new Error(`${where}.builtin: unknown pack "${p}" (${BUILTIN_PACKS.join(', ')})`);
+  }
+  for (const n of c.disable ?? []) {
+    if (!BUILTIN_RULE_NAMES.includes(n)) throw new Error(`${where}.disable: unknown built-in rule "${n}"`);
   }
   for (const [i, k] of (c.commands ?? []).entries()) {
     if (!k?.name || !Array.isArray(k.run) || !k.run.length) throw new Error(`${where}.commands[${i}] needs a name and a "run" argument list`);

@@ -1,0 +1,3 @@
+# Release checksum files and signatures used by the tests: signed byte for byte, so git must
+# never change their line endings (Windows checkouts would turn LF into CRLF).
+test/fixtures/pgp/* binary

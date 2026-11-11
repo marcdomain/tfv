@@ -62,6 +62,25 @@ export interface CheckRun {
   text?: string;
   detailsUrl?: string;
   actions?: { label: string; identifier: string; description: string }[];
+  annotations?: Annotation[];
+}
+
+// What changed between two commits (GitHub's compare): files with their blob ids,
+// and the commits on the second side that the first lacks.
+export interface Comparison {
+  files: { path: string; status: string; blob: string | null; previous?: string }[];
+  commits: { sha: string; message: string; author: string; pr?: number }[];
+  truncated: boolean;          // the platform cut the file list short
+}
+
+// A check-run note on a line range of a file (shown in the PR's "Files changed").
+export interface Annotation {
+  path: string;
+  startLine: number;
+  endLine: number;
+  level: 'notice' | 'warning' | 'failure';
+  title: string;
+  message: string;
 }
 
 export interface CloneAuth {
@@ -110,4 +129,9 @@ export interface VcsAdapter {
   codeowners(repo: Repo, ref: string): Promise<string | null>;
   // Every repo the integration can see (for scheduled drift checks).
   listRepos(): Promise<Repo[]>;
+  // Optional platform features; callers cope when they're missing.
+  compare?(repo: Repo, base: string, head: string): Promise<Comparison | null>;
+  // Commits `files` to a new branch from `base` and opens a PR. Returns its URL,
+  // or null if the branch already exists (a PR for it is open or was handled).
+  openPullRequest?(repo: Repo, pr: { base: string; branch: string; title: string; body: string; files: { path: string; content: string }[] }): Promise<string | null>;
 }
