@@ -328,12 +328,47 @@
   const fmtN = (n) => Number(n || 0).toLocaleString();
 
   // ---- views --------------------------------------------------------------
+  // Scheduled database backups: where they go, when, and the latest results.
+  const backupCard = (b) => {
+    if (!b.enabled) {
+      return `<div class="card"><div class="card-head"><h2>Database backups</h2><span class="pill">off</span></div>
+        <div class="empty">Runs, locks, audit and metrics live only on the server's volume. Turn on <code>backup.enabled</code> to copy them to S3, GCS or Azure on a schedule.</div></div>`;
+    }
+    const last = b.runs.find(r => r.ok);
+    const failing = b.runs[0] && !b.runs[0].ok;
+    return `<div class="card"><div class="card-head"><h2>Database backups</h2>
+        <span class="inline">${failing ? '<span class="pill bad">last backup failed</span>' : last ? '<span class="pill ok">working</span>' : '<span class="pill">no backup yet</span>'}
+        ${b.canRun ? `<button class="ghost small" type="button" data-backup ${b.running ? 'disabled' : ''}>${b.running ? 'Backing up…' : 'Back up now'}</button>` : ''}</span></div>
+      <div class="facts pad">
+        <span>Destination</span><span><code>${esc(b.destination)}</code></span>
+        <span>Schedule</span><span><code>${esc(b.schedule)}</code> ${esc(b.timezone)}${b.next ? ` · next ${esc(when(b.next))}` : ''}</span>
+        <span>Last good backup</span><span>${last ? `${ago(last.at)} · <code>${esc(last.name)}</code> · ${bytesText(last.bytes)}` : '<span class="muted">none yet</span>'}</span>
+        <span>Old backups</span><span class="muted">removed by your bucket's lifecycle rule; teriac never deletes them</span>
+      </div>
+      ${b.runs.length ? table(['When', 'Started by', 'Result', 'Size', 'Took', 'Backup'], b.runs.map(r => `<tr>
+        <td title="${esc(when(r.at))}">${ago(r.at)}</td><td>${r.trigger === 'manual' ? 'dashboard' : 'schedule'}</td>
+        <td>${r.ok ? '<span class="pill ok">uploaded</span>' : '<span class="pill bad">failed</span>'}</td>
+        <td>${r.bytes ? bytesText(r.bytes) : ''}</td><td>${r.seconds < 1 ? 'under 1 s' : r.seconds < 90 ? `${Math.round(r.seconds)} s` : `${Math.round(r.seconds / 60)} min`}</td>
+        <td class="wrap">${r.ok ? `<code>${esc(r.name)}</code>` : `<span class="small">${esc(r.error)}</span>`}</td>
+      </tr>`)) : ''}</div>`;
+  };
+
+  // Risk of a successful plan: "None", or the level as a pill.
+  // Reasons are written for PR comments, with `code` in backticks.
+  const reasonHtml = (t) => esc(t).replace(/`([^`]+)`/g, '<code>$1</code>');
+  const RISK = { medium: ['warn', 'Medium'], high: ['bad', 'High'], critical: ['bad', 'Critical'] };
+  const riskPill = (r) => {
+    if (r.kind !== 'plan' || r.status !== 'success' || !r.risk) return '<span class="muted">—</span>';
+    const x = RISK[r.risk.level];
+    return x ? `<span class="pill ${x[0]}" title="${esc(r.risk.reasons.join('; ').replace(/`/g, ''))}">${x[1]}</span>` : '<span class="muted">None</span>';
+  };
   const runRow = (r) => {
     const s = summaryOf(r);
     return `<tr class="click" data-run="${r.id}">
       <td>${statusPill(r)}</td>
       <td class="mono">${projLink(r.project)}${r.workspace !== 'default' ? ` <span class="muted">@${esc(r.workspace)}</span>` : ''}${r.targets?.length ? ' <span class="pill run">targeted</span>' : ''}</td>
       <td>${r.kind === 'plan' ? counts(s) : '<span class="muted">apply</span>'}</td>
+      <td>${riskPill(r)}</td>
       <td>${prLink(r)}</td>
       <td>${runPeople(r)}</td>
       <td class="muted">${esc(r.engine || '')}</td>
@@ -343,9 +378,10 @@
 
   const views = {
     async overview() {
-      const [runs, locks, drift, schedules] = await Promise.all([
-        api('/api/runs?limit=100'), api('/api/locks'), api('/api/drift'), api('/api/drift/schedules'),
+      const [runs, locks, drift, schedules, safety] = await Promise.all([
+        api('/api/runs?limit=100'), api('/api/locks'), api('/api/drift'), api('/api/drift/schedules'), api('/api/safety').catch(() => null),
       ]);
+      const frozen = (safety?.freezes || []).filter(w => w.until);
       const day = Date.now() - 86400e3;
       const today = runs.filter(r => Date.parse(r.startedAt) > day);
       const latestDrift = new Map();
@@ -358,6 +394,7 @@
       const nextRun = schedules.map(s => s.next).filter(Boolean).sort()[0];
       return `
         <div class="page-head"><h1>Overview</h1><span class="muted">Everything teriac did across your repos</span></div>
+        ${frozen.length ? `<div class="banner"><b>Change freeze on:</b> ${frozen.map(w => `${esc(w.name)} until ${esc(w.until)}`).join(', ')} · <a href="#guardrails">Guardrails</a></div>` : ''}
         <div class="tiles">
           <a class="tile" href="${listLink('runs', { range: '24h' })}"><span class="n">${today.length}</span><span class="k">runs in the last 24 hours</span></a>
           <a class="tile ${failed.length ? 'bad' : ''}" href="${listLink('runs', { status: 'failed', range: '24h' })}"><span class="n">${failed.length}</span><span class="k">failed runs in 24 hours</span></a>
@@ -367,7 +404,7 @@
         </div>
         <div class="card">
           <div class="card-head"><h2>Recent runs</h2><a href="#runs">All runs</a></div>
-          ${table(['Result', 'Project', 'Changes', 'Pull request', 'People', 'Engine', 'When'], runs.slice(0, 8).map(runRow), 'No runs yet. Open a pull request that changes Terraform code.')}
+          ${table(['Result', 'Project', 'Changes', 'Risk', 'Pull request', 'People', 'Engine', 'When'], runs.slice(0, 8).map(runRow), 'No runs yet. Open a pull request that changes Terraform code.')}
         </div>
         <div class="card">
           <div class="card-head"><h2>People</h2><span class="muted small">last 7 days · click a person for their runs</span></div>
@@ -456,6 +493,8 @@
         </div>
         ${r.targets?.length ? `<div class="banner note">Targeted plan: only ${r.targets.map(t => `<code>${esc(t)}</code>`).join(', ')}.</div>` : ''}
         ${dangerous.length ? `<div class="banner"><b>${dangerous.length} resource${dangerous.length === 1 ? '' : 's'} will be destroyed or replaced.</b></div>` : ''}
+        ${r.kind === 'plan' && r.status === 'success' && r.risk && RISK[r.risk.level] ? `<div class="banner ${r.risk.level === 'medium' ? 'warn' : ''}"><b>Risk: ${RISK[r.risk.level][1]}</b> · ${r.risk.reasons.map(reasonHtml).join(' · ')}</div>` : ''}
+        ${r.secrets?.length ? `<div class="banner warn"><b>Something that looks like a secret was hidden from this output</b> (${r.secrets.map(esc).join(', ')}). Check where it came from.</div>` : ''}
         ${s && s.changes.length ? `<div class="card"><div class="card-head"><h2>Changes</h2>${counts(s)}</div><pre class="changes">${changeLines(s.changes)}</pre></div>` : ''}
         ${s && (s.drift.length || s.outputs.length) ? `<div class="grid2">
           <div class="card"><div class="card-head"><h2>Changed outside Terraform</h2></div>${s.drift.length ? `<pre class="changes">${changeLines(s.drift)}</pre>` : '<div class="empty">None</div>'}</div>
@@ -476,6 +515,54 @@
             <td>${adminButton('Unlock', `data-unlock='${esc(JSON.stringify({ repo: l.repo, project: l.project, workspace: l.workspace, pr: l.pr, user: l.user, createdAt: l.createdAt, prUrl: l.links?.pr ?? null }))}'`)}</td>
           </tr>`;
         }), 'No projects are locked.')}</div>`;
+    },
+
+    async guardrails() {
+      const [g, b] = await Promise.all([api('/api/safety'), api('/api/backups').catch(() => ({ enabled: false }))]);
+      if (g.error) return `<div class="page-head"><h1>Guardrails</h1></div><div class="card"><div class="empty">Not available on this server.</div></div>`;
+      const people = (list) => (list.length ? list.map(p => `<span class="pill">${esc(p)}</span>`).join(' ') : '<span class="muted">nobody</span>');
+      const globs = (list) => (list.length ? list.map(x => `<code>${esc(x)}</code>`).join(', ') : '<span class="muted">all projects</span>');
+      const when = (w) => (w.schedule ? `<code>${esc(w.schedule)}</code> for ${w.hours} h` : `${esc(w.from)} → ${esc(w.to)}`) + ` <span class="muted">${esc(w.timezone)}</span>`;
+      const on = g.freezes.filter(w => w.until);
+      const yes = (b) => (b ? 'on' : '<span class="muted">off</span>');
+      const r = g.risk || {};
+      return `
+        <div class="page-head"><h1>Guardrails</h1><span class="muted">What stops a risky apply, from repos.yaml</span></div>
+        ${on.length ? `<div class="banner"><b>${on.length} change freeze${on.length === 1 ? ' is' : 's are'} on now:</b> ${on.map(w => `${esc(w.name)} (until ${esc(w.until)})`).join(', ')}</div>` : ''}
+        <div class="card"><div class="card-head"><h2>Change freezes</h2><span class="muted small">no applies or state edits; plans still run</span></div>
+          ${table(['Name', 'Status', 'When', 'Projects', 'Applies to', 'Can override'], g.freezes.map(w => `<tr>
+            <td><b>${esc(w.name)}</b></td>
+            <td>${w.until ? `<span class="pill bad">on until ${esc(w.until)}</span>` : '<span class="pill">off</span>'}</td>
+            <td>${when(w)}</td><td class="wrap">${globs(w.projects)}</td><td>${esc(w.scope)}</td><td>${people(w.override)}</td>
+          </tr>`), 'No change freezes. Add them under <code>freezes:</code> in repos.yaml.')}</div>
+        <div class="card"><div class="card-head"><h2>Protected resources</h2><span class="muted small">never destroyed or replaced</span></div>
+          ${table(['Resources', 'Projects', 'Applies to', 'Can override'], g.protected.map(p => `<tr>
+            <td class="wrap">${p.resources.map(x => `<code>${esc(x)}</code>`).join(', ')}</td><td class="wrap">${globs(p.projects)}</td><td>${esc(p.scope)}</td><td>${people(p.override)}</td>
+          </tr>`), 'No protected resources. Add them under <code>protected:</code> in repos.yaml.')}</div>
+        <div class="grid2">
+          <div class="card"><div class="card-head"><h2>Risk</h2><span class="muted small">scored automatically on every plan</span></div>
+            <div class="facts pad">
+              <span>Production</span><span>${globs(r.production || ['prod/**', 'production/**', 'prd/**'])}${r.production ? '' : ' <span class="muted">(default)</span>'}</span>
+              <span>Extra stateful types</span><span>${(r.stateful_types || []).length ? r.stateful_types.map(x => `<code>${esc(x)}</code>`).join(', ') : '<span class="muted">none</span>'}</span>
+              <span>Size limits</span><span>medium over ${r.size_limits?.medium ?? 25}, high over ${r.size_limits?.high ?? 100} resources</span>
+              <span>Extra approvals</span><span>${Object.entries(r.extra_approval || {}).map(([lvl, a]) => `${esc(lvl)}: ${a.count} from <span class="pill">${esc(a.from)}</span>`).join('<br>') || '<span class="muted">none</span>'}</span>
+            </div></div>
+          <div class="card"><div class="card-head"><h2>Checks on every plan</h2></div>
+            <div class="facts pad">
+              <span>Policies</span><span>${esc(g.policies.mode)}${g.policies.builtin.length ? ` · built-in: ${g.policies.builtin.map(esc).join(', ')}` : ''}${g.policies.rules ? ` · ${g.policies.rules} own rule${g.policies.rules === 1 ? '' : 's'}` : ''}${g.policies.disable.length ? ` · off: ${g.policies.disable.map(esc).join(', ')}` : ''}</span>
+              <span>Policy override</span><span>${people(g.policies.override)}</span>
+              <span>Secret scan</span><span>${esc(g.secretScan.mode)}${g.secretScan.patterns.length ? ` · own patterns: ${g.secretScan.patterns.map(esc).join(', ')}` : ''}</span>
+              <span>Emergency access</span><span>${g.breakGlass ? `grantors ${people(g.breakGlass.grantors)} · up to ${g.breakGlass.maxHours} h · <a href="#access">Access</a>` : '<span class="muted">off</span>'}</span>
+              <span>Weekly summary</span><span>${g.summary ? `<code>${esc(g.summary.schedule)}</code> ${esc(g.summary.timezone)} → ${g.summary.notify.map(esc).join(', ')}` : '<span class="muted">off</span>'}</span>
+            </div></div>
+        </div>
+        ${backupCard(b)}
+        <div class="card"><div class="card-head"><h2>Approvals and branches, per repo entry</h2></div>
+          ${table(['Repos', 'Re-approve after push', 'Keep on rebase', 'Behind base', 'Reviewed plan only', 'Secret scan'], g.repos.map(x => `<tr>
+            <td class="mono">${esc(x.id)}</td><td>${yes(x.reapproveOnChange)}</td><td>${yes(x.keepApprovalOnRebase)}</td>
+            <td>${x.staleBase === 'block' ? '<span class="pill bad">block</span>' : x.staleBase === 'warn' ? '<span class="pill warn">warn</span>' : '<span class="muted">off</span>'}</td>
+            <td>${yes(x.verifyPlan)}</td><td>${esc(x.secretScan || g.secretScan.mode)}</td>
+          </tr>`), 'No repos.')}</div>`;
     },
 
     async access() {
@@ -544,7 +631,7 @@
             </tr>`), 'Nothing changed outside Terraform.')}
             <div class="card-foot">
               <span class="muted small">${f.lastApply ? `Last applied by ${who(f.lastApply.user, f.lastApply.links?.user, null, f.lastApply.links?.userAvatar)} via ${ext(f.lastApply.links?.pr, `PR #${f.lastApply.pr}`, 'plain')}` : 'Never applied through teriac'}${f.pending && Object.values(f.pending).some(Boolean) ? ` · merged but not applied: ${counts(f.pending)}` : ''}</span>
-              <span class="muted small">checked ${ago(d.at)}${d.notified ? ` · notified ${d.notified.map(n => esc(n.channel)).join(', ')}` : ''}</span>
+              <span class="muted small">${f.fixPr ? `${ext(f.fixPr, 'Fix PR', 'plain')} · ` : f.fixNote ? `${esc(f.fixNote)} · ` : ''}checked ${ago(d.at)}${d.notified ? ` · notified ${d.notified.map(n => esc(n.channel)).join(', ')}` : ''}</span>
             </div>
           </div>`;
         }).join('')}`;
@@ -881,7 +968,7 @@
   const LISTS = {
     runs: {
       url: '/api/runs/search', keys: ['q', 'user', 'project', 'status', 'kind', 'sort'], noun: ['run', 'runs'],
-      head: ['Result', 'Project', 'Changes', 'Pull request', 'People', 'Engine', 'When'], row: runRow, empty: 'No runs match these filters.',
+      head: ['Result', 'Project', 'Changes', 'Risk', 'Pull request', 'People', 'Engine', 'When'], row: runRow, empty: 'No runs match these filters.',
     },
     policy: {
       url: '/api/policy/search', keys: ['q', 'project', 'rule', 'severity', 'mode'], noun: ['finding', 'findings'],
@@ -1118,6 +1205,18 @@
         toast(`Revoked emergency access #${revoke.dataset.revoke}.`);
       } catch (err) {
         toast(`Could not revoke: ${err.message}`, true);
+      }
+      return route();
+    }
+    const backup = e.target.closest('button[data-backup]');
+    if (backup) {
+      backup.disabled = true;
+      backup.textContent = 'Backing up…';
+      try {
+        const r = await api('/api/backups/run', { method: 'POST' });
+        toast(`Backup uploaded: ${r.name}`);
+      } catch (err) {
+        toast(`Backup failed: ${err.message}`, true);
       }
       return route();
     }

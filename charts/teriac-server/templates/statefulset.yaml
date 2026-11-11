@@ -95,6 +95,61 @@ spec:
               value: {{ .Values.config.logLevel | quote }}
             - name: TERIAC_VERIFY_SIGNATURES
               value: {{ .Values.config.verifySignatures | quote }}
+            {{- if .Values.backup.enabled }}
+            {{- $type := include "teriac.backupType" . }}
+            {{- $sec := index .Values.backup.backend $type }}
+            - name: TERIAC_BACKUP_ENABLED
+              value: "true"
+            - name: TERIAC_BACKUP_SCHEDULE
+              value: {{ .Values.backup.schedule | quote }}
+            - name: TERIAC_BACKUP_TIMEZONE
+              value: {{ .Values.backup.timezone | default "UTC" | quote }}
+            {{- with .Values.backup.notify }}
+            - name: TERIAC_BACKUP_NOTIFY
+              value: {{ join "," . | quote }}
+            {{- end }}
+            - name: TERIAC_BACKUP_BACKEND
+              value: {{ $type | quote }}
+            - name: TERIAC_BACKUP_BUCKET
+              value: {{ ternary $sec.container $sec.bucket (eq $type "azure") | quote }}
+            - name: TERIAC_BACKUP_PATH
+              value: {{ $sec.path | default (printf "teriac/%s/%s" .Release.Namespace .Release.Name) | quote }}
+            {{- if eq $type "s3" }}
+            {{- with $sec.region }}
+            - name: TERIAC_BACKUP_S3_REGION
+              value: {{ . | quote }}
+            {{- end }}
+            {{- with $sec.endpoint }}
+            - name: TERIAC_BACKUP_S3_ENDPOINT
+              value: {{ . | quote }}
+            {{- end }}
+            {{- with $sec.storageClass }}
+            - name: TERIAC_BACKUP_S3_STORAGE_CLASS
+              value: {{ . | quote }}
+            {{- end }}
+            {{- end }}
+            {{- if eq $type "azure" }}
+            - name: TERIAC_BACKUP_AZURE_ACCOUNT
+              value: {{ $sec.accountName | quote }}
+            {{- end }}
+            {{- with .Values.backup.backend.existingSecret }}
+            {{- if eq $type "s3" }}
+            - name: AWS_ACCESS_KEY_ID
+              valueFrom:
+                secretKeyRef: { name: {{ . }}, key: access-key-id }
+            - name: AWS_SECRET_ACCESS_KEY
+              valueFrom:
+                secretKeyRef: { name: {{ . }}, key: secret-access-key }
+            {{- else if eq $type "azure" }}
+            - name: TERIAC_BACKUP_AZURE_KEY
+              valueFrom:
+                secretKeyRef: { name: {{ . }}, key: account-key }
+            {{- else }}
+            - name: GOOGLE_APPLICATION_CREDENTIALS
+              value: /secrets/backup/credentials.json
+            {{- end }}
+            {{- end }}
+            {{- end }}
             {{- with .Values.config.preinstall }}
             - name: TERIAC_PREINSTALL
               value: {{ join "," . | quote }}
@@ -186,6 +241,11 @@ spec:
               mountPath: /tmp
             - name: home
               mountPath: /home/teriac
+            {{- if and .Values.backup.enabled .Values.backup.backend.existingSecret (eq (include "teriac.backupType" .) "gcs") }}
+            - name: backup-credentials
+              mountPath: /secrets/backup
+              readOnly: true
+            {{- end }}
       volumes:
         - name: github
           secret:
@@ -219,6 +279,13 @@ spec:
           emptyDir: {}
         - name: home
           emptyDir: {}
+        {{- if and .Values.backup.enabled .Values.backup.backend.existingSecret (eq (include "teriac.backupType" .) "gcs") }}
+        - name: backup-credentials
+          secret:
+            secretName: {{ .Values.backup.backend.existingSecret }}
+            items: [{ key: credentials.json, path: credentials.json }]
+            defaultMode: 0440
+        {{- end }}
         {{- if not .Values.persistence.enabled }}
         - name: data
           emptyDir: {}

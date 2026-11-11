@@ -11,6 +11,9 @@ import type { DriftScheduler } from './drift.ts';
 import type { Person } from './config.ts';
 import { presenter } from './present.ts';
 import { isGrantor, parseGrantRequest, announce, grantText, type NotifyDeps } from './grants.ts';
+import { windowUntil } from './freeze.ts';
+import { destination, type BackupScheduler } from './backup.ts';
+import type { ServerConfig } from './config.ts';
 import { Avatars } from './avatars.ts';
 import {
   type AuthConfig, type Oidc, type Role, type Session, checkLogin, newSession, parseCookies, unsign,
@@ -89,7 +92,33 @@ export interface HttpDeps {
   people?: Person[];
   avatars?: Avatars;
   grants?: NotifyDeps;                        // emergency access (break_glass in repos.yaml)
+  config?: ServerConfig;                      // for the Guardrails page (settings only, no secrets)
+  backups?: BackupScheduler;                  // scheduled database backups (TERIAC_BACKUP_*)
 }
+
+// The guardrails in force, for the dashboard: freezes (on now or not), protected resources,
+// risk and policy settings, the secret scan, and each repo entry's approval settings.
+const safetySummary = (c: ServerConfig | undefined, now = new Date()) => {
+  if (!c) return null;
+  const freeze = (w: NonNullable<ServerConfig['freezes']>[number], scope: string) => ({
+    scope, name: w.name, projects: w.projects ?? [], schedule: w.schedule ?? null, hours: w.hours ?? null,
+    from: w.from ?? null, to: w.to ?? null, timezone: w.timezone ?? 'UTC', override: w.override ?? [], until: windowUntil(w, now),
+  });
+  const prot = (r: NonNullable<ServerConfig['protected']>[number], scope: string) => ({ scope, projects: r.projects ?? [], resources: r.resources, override: r.override ?? [] });
+  return {
+    freezes: [...(c.freezes ?? []).map(w => freeze(w, 'every repo')), ...c.repos.flatMap(r => (r.freezes ?? []).map(w => freeze(w, r.id)))],
+    protected: [...(c.protected ?? []).map(r => prot(r, 'every repo')), ...c.repos.flatMap(r => (r.protected ?? []).map(x => prot(x, r.id)))],
+    secretScan: { mode: c.secretScan?.mode ?? 'redact', patterns: (c.secretScan?.patterns ?? []).map(p => p.name) },
+    policies: { mode: c.policies?.mode ?? 'off', builtin: c.policies?.builtin ?? [], disable: c.policies?.disable ?? [], rules: (c.policies?.rules ?? []).length, override: c.policies?.override ?? [] },
+    risk: c.risk ?? null,
+    breakGlass: c.breakGlass ? { grantors: c.breakGlass.grantors, maxHours: c.breakGlass.max_hours ?? 4 } : null,
+    summary: c.summary ? { schedule: c.summary.schedule, timezone: c.summary.timezone ?? 'UTC', notify: c.summary.notify } : null,
+    repos: c.repos.map(r => ({
+      id: r.id, reapproveOnChange: r.reapprove_on_change ?? true, keepApprovalOnRebase: r.keep_approval_on_rebase ?? false,
+      staleBase: r.stale_base ?? 'warn', verifyPlan: r.verify_plan ?? true, secretScan: r.secret_scan ?? null,
+    })),
+  };
+};
 
 const defaultLimiter = new RateLimiter(10, 15 * 60_000);
 
@@ -125,7 +154,15 @@ export const createHttpServer = (deps: HttpDeps): Server => {
       return res.end(SPINNER);
     }
     if (req.method === 'GET' && url.pathname === '/metrics') {
-      return send(res, 200, metrics.render({ teriac_locks: deps.store.allLocks().length }), 'text/plain; version=0.0.4');
+      const extra: Record<string, number> = { teriac_locks: deps.store.allLocks().length };
+      if (deps.backups) {
+        const recent = deps.store.recentBackups(50);
+        const ok = recent.find(b => b.ok);
+        extra.teriac_backup_last_ok = recent[0] ? (recent[0].ok ? 1 : 0) : 1;
+        extra.teriac_backup_last_success_timestamp_seconds = ok ? Math.floor(Date.parse(ok.at) / 1000) : 0;
+        if (ok?.bytes) extra.teriac_backup_last_size_bytes = ok.bytes;
+      }
+      return send(res, 200, metrics.render(extra), 'text/plain; version=0.0.4');
     }
 
     const hook = /^\/events\/([a-z]+)$/.exec(url.pathname);
@@ -303,6 +340,24 @@ export const createHttpServer = (deps: HttpDeps): Server => {
         return send(res, 200, deps.store.getGrant(grant.id));
       }
 
+      // ---- backups ----
+      if (url.pathname === '/api/backups' && req.method === 'GET') {
+        const c = deps.config?.backup;
+        if (!c || !deps.backups) return send(res, 200, { enabled: false });
+        return send(res, 200, {
+          enabled: true, schedule: c.schedule, timezone: c.timezone, destination: destination(c),
+          next: deps.backups.next(), running: deps.backups.busy, canRun: need('admin'),
+          runs: deps.store.recentBackups(Math.min(100, Number(url.searchParams.get('limit') ?? 10))),
+        });
+      }
+      if (url.pathname === '/api/backups/run' && req.method === 'POST') {
+        if (!deps.backups) return send(res, 404, { error: 'Backups are off. Set backup.enabled (TERIAC_BACKUP_ENABLED) to turn them on.' });
+        if (!need('admin')) return send(res, 403, { error: 'Only admins can start a backup.' });
+        const run = await deps.backups.run('manual');
+        deps.store.audit({ repo: '*', pr: 0, user: who.name, action: 'backup', project: '*', allowed: run.ok, reason: run.ok ? `backup ${run.name} from the dashboard (${who.via})` : `backup from the dashboard failed: ${run.error}` });
+        return send(res, run.ok ? 200 : 502, run);
+      }
+
       if (req.method === 'POST' && url.pathname === '/api/drift/run') {
         if (!need('admin')) return send(res, 403, { error: 'Only admins can start drift checks.' });
         const entry = deps.drift?.schedules.find(e => e.key === url.searchParams.get('key'));
@@ -370,6 +425,7 @@ export const createHttpServer = (deps: HttpDeps): Server => {
           })));
         }
         if (url.pathname === '/api/ping') return send(res, 200, { ok: true });
+        if (url.pathname === '/api/safety') return send(res, 200, safetySummary(deps.config) ?? { error: 'not available' });
         if (url.pathname === '/api/drift') return send(res, 200, deps.store.recentDrift(200).map(show.drift));
         if (url.pathname === '/api/drift/schedules') {
           return send(res, 200, (deps.drift?.schedules ?? []).map(e => ({

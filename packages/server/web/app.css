@@ -177,6 +177,10 @@ pre.log { max-height: 520px; background: var(--sunken); }
 .l-add { color: var(--ok); } .l-chg { color: var(--warn); } .l-del { color: var(--bad); }
 .banner { padding: 10px 16px; border-left: 4px solid var(--bad); background: var(--bad-bg); border-radius: 0 8px 8px 0; }
 .banner.note { border-left-color: var(--accent); background: var(--accent-soft); }
+.banner.warn { border-left-color: var(--warn); background: var(--warn-bg); }
+.banner + .banner, .banner + .card, .card + .banner { margin-top: 12px; }
+.facts.pad { display: grid; grid-template-columns: auto 1fr; gap: 8px 16px; padding: 14px 16px; align-items: baseline; }
+.facts.pad > span:nth-child(odd) { color: var(--muted); white-space: nowrap; }
 
 @media (max-width: 760px) {
   .foot { padding: 12px 16px; }

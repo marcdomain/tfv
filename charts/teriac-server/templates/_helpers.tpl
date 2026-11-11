@@ -73,6 +73,56 @@ app.kubernetes.io/managed-by: {{ .Release.Service }}
 {{- if and (not .Values.config.repoAllowlist) (not .Values.repos.repos) -}}
 {{- fail "allow at least one repo: config.repoAllowlist or repos.repos" -}}
 {{- end -}}
+{{- include "teriac.validateBackup" . -}}
+{{- end -}}
+
+{{/* The backup backend: the one of backup.backend.s3, .gcs or .azure that names a bucket (container). */}}
+{{- define "teriac.backupType" -}}
+{{- $d := .Values.backup.backend | default dict -}}
+{{- $set := list -}}
+{{- if (($d.s3 | default dict).bucket) }}{{ $set = append $set "s3" }}{{ end -}}
+{{- if (($d.gcs | default dict).bucket) }}{{ $set = append $set "gcs" }}{{ end -}}
+{{- if (($d.azure | default dict).container) }}{{ $set = append $set "azure" }}{{ end -}}
+{{- join "," $set -}}
+{{- end -}}
+
+{{/* Backup settings, checked at install so mistakes don't surface as a failed backup at 3am. */}}
+{{- define "teriac.validateBackup" -}}
+{{- $b := .Values.backup -}}
+{{- if $b.enabled -}}
+{{- $d := $b.backend -}}
+{{- if or (not (kindIs "map" $d)) $d.type $d.bucket -}}
+{{- fail "backup.backend: fill in one section with its bucket: backup.backend.s3.bucket, backup.backend.gcs.bucket, or backup.backend.azure.container (with accountName)" -}}
+{{- end -}}
+{{- $schedule := regexReplaceAll "\\s+" (trim (toString $b.schedule)) " " -}}
+{{- if not $schedule -}}
+{{- fail "backup.schedule is required when backup.enabled is true (cron, e.g. \"0 3 * * *\")" -}}
+{{- end -}}
+{{- if ne (len (splitList " " $schedule)) 5 -}}
+{{- fail (printf "backup.schedule %q must be a cron expression with 5 fields: minute hour day month weekday, e.g. \"0 3 * * *\"" $b.schedule) -}}
+{{- end -}}
+{{- $type := include "teriac.backupType" . -}}
+{{- if not $type -}}
+{{- fail "backup.enabled is true but no backend is set: fill in backup.backend.s3.bucket, backup.backend.gcs.bucket, or backup.backend.azure.container" -}}
+{{- end -}}
+{{- if contains "," $type -}}
+{{- fail (printf "backup.backend: set only one of s3, gcs or azure (found %s)" (replace "," ", " $type)) -}}
+{{- end -}}
+{{- $sec := index $d $type -}}
+{{- $bucket := ternary $sec.container $sec.bucket (eq $type "azure") -}}
+{{- if contains "/" $bucket -}}
+{{- fail (printf "backup.backend.%s.%s %q must be the name only; put folders in backup.backend.%s.path" $type (ternary "container" "bucket" (eq $type "azure")) $bucket $type) -}}
+{{- end -}}
+{{- if or (contains ".." (toString $sec.path)) (contains "//" (toString $sec.path)) -}}
+{{- fail (printf "backup.backend.%s.path %q may not contain \"..\" or empty folders" $type (toString $sec.path)) -}}
+{{- end -}}
+{{- if and (eq $type "azure") (not $sec.accountName) -}}
+{{- fail "backup.backend.azure.accountName is required with backup.backend.azure.container" -}}
+{{- end -}}
+{{- if and (eq $type "s3") $sec.endpoint (not (regexMatch "^https?://" $sec.endpoint)) -}}
+{{- fail (printf "backup.backend.s3.endpoint %q must start with https:// or http://" $sec.endpoint) -}}
+{{- end -}}
+{{- end -}}
 {{- end -}}
 
 {{- define "teriac.authSecretName" -}}

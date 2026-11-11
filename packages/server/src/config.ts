@@ -4,6 +4,7 @@ import { readFileSync, existsSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import YAML from 'yaml';
 import { parseCron, validTimeZone } from './cron.ts';
+import { parseBackup, type BackupConfig } from './backup.ts';
 import { randomBytes } from 'node:crypto';
 import type { AuthConfig, DashboardUser } from './auth.ts';
 import { REACTIONS, type Ack } from './vcs/types.ts';
@@ -154,6 +155,7 @@ export interface ServerConfig {
   protected?: ProtectedConfig;
   breakGlass?: BreakGlassConfig;
   summary?: SummaryConfig;
+  backup?: BackupConfig;                  // scheduled database backups (TERIAC_BACKUP_*)
 }
 
 const readSecret = (env: NodeJS.ProcessEnv, name: string): string | undefined => {
@@ -392,6 +394,7 @@ export const loadConfig = (env: NodeJS.ProcessEnv = process.env): ServerConfig =
     protected: policy.protected,
     breakGlass: policy.breakGlass,
     summary: policy.summary,
+    backup: parseBackup({ ...env, TERIAC_BACKUP_AZURE_KEY: readSecret(env, 'TERIAC_BACKUP_AZURE_KEY') }, policy.channels),
     auth: loadAuth(env, publicUrl, policy.users),
   };
 };

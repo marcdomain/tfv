@@ -26,8 +26,21 @@ docker run -p 8080:8080 -v teriac-data:/data \
 Set up the GitHub App like this:
 - **Webhook URL:** `https://<host>/events/github`
 - **Events:** pull request, issue comment, check run
-- **Permissions:** Checks (read & write), Contents (read), Issues (read & write), Pull requests
-  (read & write), Members (read). Drift fix PRs (`fix_pr`) also need Contents (read & write).
+- **Permissions** (Settings → Developer settings → GitHub Apps → your App → Permissions and events):
+
+  | Permission | Access | What teriac uses it for |
+  |---|---|---|
+  | Repository → **Checks** | Read & write | A check run per plan, the **Apply** button, and code annotations on risky lines |
+  | Repository → **Contents** | Read | Cloning the PR, reading `teriac.yaml` and `CODEOWNERS`, comparing the branch with its base (out-of-date warnings, keeping approvals after a rebase) |
+  | | Read & write | Only for drift fix PRs (`fix_pr: true`): pushing the fix branch |
+  | Repository → **Issues** | Read & write | Posting and editing comments, and the 👀 reaction on commands (PR comments use the Issues API) |
+  | Repository → **Pull requests** | Read & write | Changed files, reviews and approvals, mergeable state, and opening drift fix PRs |
+  | Repository → **Metadata** | Read | Required by GitHub for every App |
+  | Organization → **Members** | Read | `team:` rules: approvers, permissions, `override` lists and emergency-access grantors |
+
+  Nothing else is needed: no Administration, Workflows, Secrets or Actions access. After changing
+  permissions, an org owner must accept them under the org's *Installed GitHub Apps*, or the App
+  keeps the old ones.
 - **Logo:** upload [`brand/teriac-avatar.png`](../../brand/teriac-avatar.png) under *Display information*.
   Without a logo, GitHub shows the App owner's picture on teriac's comments.
 
@@ -88,9 +101,16 @@ project again Only these commands run, and arguments are checked, so nothing els
 | `TERIAC_LOG_LEVEL` | `info` | `debug`, `info`, `warn` or `error` |
 | `TERIAC_SESSION_HOURS` | `12` | How long a dashboard sign-in lasts |
 | `TERIAC_VERIFY_SIGNATURES` | `true` | Check the vendor's signature on downloaded Terraform, OpenTofu and Terragrunt. `false` for mirrors that don't copy `.sig` files |
+| `TERIAC_BACKUP_ENABLED` | `false` | Scheduled database backups; see [Backups](#backups) for the `TERIAC_BACKUP_*` settings |
 
 `TERIAC_*` values are never passed to Terraform. Each secret can also be read from a file:
 `<NAME>_FILE` (for example `TERIAC_SESSION_SECRET_FILE`).
+
+**Module sources.** The image keeps only what the server runs (node, git, rclone), so it has
+no SSH client: use `git::https://` module sources. For private modules, give git a token
+with `extraEnv`, for example `GIT_CONFIG_COUNT=1`,
+`GIT_CONFIG_KEY_0=url.https://x-access-token:<token>@github.com/.insteadOf` and
+`GIT_CONFIG_VALUE_0=https://github.com/`.
 
 Terraform, scanners and scripts get the PR's details instead: `TERIAC_REPO`, `TERIAC_PR_NUMBER`,
 `TERIAC_HEAD_SHA`, `TERIAC_PROJECT`, `TERIAC_WORKSPACE` and `TERIAC_USER` (who ran the command).
@@ -445,6 +465,67 @@ with who last changed them. Merge the PR to accept the change; close it and appl
 to put things back. One PR per project at a time (branch `teriac/drift-fix/<project>`). The
 GitHub App needs **Contents: read & write** for this.
 
+## Backups
+
+Runs, locks, the audit log, drift history and metrics live in a SQLite database on the server's
+volume. With backups on, the server copies the database **only at the scheduled times**,
+gzips the copy, uploads it to S3, GCS or Azure, and deletes the local copy. Nothing builds
+up on the volume, whether the upload works or not.
+
+| Setting | Helm value | Default | Does |
+|---|---|---|---|
+| `TERIAC_BACKUP_ENABLED` | `backup.enabled` | `false` | Turn backups on |
+| `TERIAC_BACKUP_SCHEDULE` | `backup.schedule` | `0 3 * * *` in the chart | When to back up (cron: minute hour day month weekday). Required |
+| `TERIAC_BACKUP_TIMEZONE` | `backup.timezone` | `UTC` | Time zone of the schedule |
+| `TERIAC_BACKUP_BACKEND` | the section you fill in: `backup.backend.s3`, `.gcs` or `.azure` | | `s3`, `gcs` or `azure`. `s3` also covers MinIO, Cloudflare R2, Backblaze B2, … |
+| `TERIAC_BACKUP_BUCKET` | `backup.backend.s3.bucket`, `.gcs.bucket` or `.azure.container` | | Bucket (Azure: container) name only |
+| `TERIAC_BACKUP_PATH` | `backup.backend.<s3, gcs or azure>.path` | `teriac` (chart: `teriac/<namespace>/<release>`) | Folder in the bucket |
+| `TERIAC_BACKUP_S3_REGION` / `_S3_ENDPOINT` / `_S3_STORAGE_CLASS` | `backup.backend.s3.region`, `.endpoint`, `.storageClass` | | Region; endpoint for S3-compatible services only; storage class |
+| `TERIAC_BACKUP_AZURE_ACCOUNT` | `backup.backend.azure.accountName` | | Storage account (required for Azure) |
+| `TERIAC_BACKUP_NOTIFY` | `backup.notify` | | Channels told when a backup fails, and when backups work again |
+
+**Credentials.** By default the server signs in as itself: IRSA or EKS Pod Identity, GKE
+Workload Identity, or Azure Workload Identity. Otherwise use `AWS_ACCESS_KEY_ID` and
+`AWS_SECRET_ACCESS_KEY` (S3), `GOOGLE_APPLICATION_CREDENTIALS` (GCS), or
+`TERIAC_BACKUP_AZURE_KEY` (Azure). In Helm, `backup.backend.existingSecret` names a Secret
+with `access-key-id` and `secret-access-key`, `credentials.json`, or `account-key`.
+
+**Bucket permissions.** S3: `s3:ListBucket` on the bucket, `s3:GetObject` and
+`s3:PutObject` on the path (plus `kms:GenerateDataKey` and `kms:Decrypt` with SSE-KMS). GCS:
+`roles/storage.objectUser`. Azure: *Storage Blob Data Contributor*. Nothing needs delete
+or create-bucket rights.
+
+**Old backups.** teriac never deletes backups. Add a lifecycle rule (expiration) to the
+bucket for the backup path. Each backup (`teriac-20261111T030000000Z.db.gz`) is a whole
+database on its own, so expiring old ones never breaks newer ones. Keep the expiry well
+above the time between backups (daily backups: 7 days or more), so a recent one always
+exists.
+
+**Restoring.** When the server starts and its volume has no database (a new PVC, a lost
+disk, or `persistence.enabled: false`), it restores the newest backup that passes SQLite's
+integrity check. A broken backup, or one the lifecycle rule removed after it was listed, is
+skipped for the one before. A volume that already has a database is kept as is. If the
+bucket can't be read (wrong name or credentials), the server doesn't start, rather than
+start empty and hide the problem. Set `TERIAC_BACKUP_ENABLED=false` to start without
+restoring. Changes since the last backup are lost with the volume, so back up as often as
+that matters to you.
+
+**Watching it.** The dashboard's **Guardrails** page shows the destination, the next
+backup, the latest results and a **Back up now** button for admins (audited).
+`/metrics` has `teriac_backup_last_ok` and `teriac_backup_last_success_timestamp_seconds`,
+for an alert such as "no good backup in 26 hours". A backup needs free space on the
+volume about the size of the database while it runs.
+
+Docker:
+
+```sh
+docker run -d -p 8080:8080 -v teriac-data:/data \
+  -e TERIAC_BACKUP_ENABLED=true -e TERIAC_BACKUP_SCHEDULE='0 3 * * *' \
+  -e TERIAC_BACKUP_BACKEND=s3 -e TERIAC_BACKUP_BUCKET=acme-backups -e TERIAC_BACKUP_S3_REGION=eu-west-1 \
+  -e AWS_ACCESS_KEY_ID -e AWS_SECRET_ACCESS_KEY \
+  … ghcr.io/marcdomain/teriac-server
+```
+
 ## Tamper-proof output
 
 GitHub lets anyone with write access edit any comment, including teriac's. teriac never reads its
@@ -456,17 +537,20 @@ original" section, and logs it in the audit log.
 ## Dashboard
 
 Open the server's URL in a browser. It shows:
-- an overview of runs, failures, locks and drift;
-- every plan and apply, with its change list and redacted log;
+- an overview of runs, failures, locks and drift, with a banner while a change freeze is on;
+- every plan and apply, with its risk, change list and redacted log;
 - locks, with an Unlock button;
 - drift schedules, findings, and who last changed each resource;
 - the audit log;
+- **Guardrails**: change freezes (and whether one is on now), protected resources, risk,
+  policy and secret-scan settings, each repo entry's approval settings, and database
+  backups with a **Back up now** button (see [Backups](#backups));
 - **Access**: emergency access grants (see [Emergency access](#emergency-access));
 - **Metrics**: runs, timings, resource use, and delivery: PR to applied, failed applies, time to
   fix, applies per week.
 
-It has light and dark themes. Viewers can see everything; admins can also unlock and start drift
-checks.
+It has light and dark themes. Viewers can see everything; admins can also unlock, start drift
+checks and start a backup.
 
 | Sign-in | Settings |
 |---|---|
@@ -487,5 +571,8 @@ These need a dashboard session or `Authorization: Bearer $TERIAC_API_TOKEN`:
 - `GET /api/drift/schedules`
 - `POST /api/drift/run?key=…` (admin)
 - `POST /api/locks/unlock` (admin)
+- `GET /api/safety` (the Guardrails page)
+- `GET /api/backups`
+- `POST /api/backups/run` (admin)
 
 `/healthz`, `/readyz` and `/metrics` (Prometheus) are open.
