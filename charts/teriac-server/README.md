@@ -38,7 +38,11 @@ dashboard:
 ```
 
 Then:
-1. Point the GitHub App's webhook at `https://teriac.acme.dev/events/github`.
+1. Point the GitHub App's webhook at `https://teriac.acme.dev/events/github`, with the events
+   Pull request, Issue comment and Check run. The App needs **Checks**, **Issues** and **Pull
+   requests** (read & write), **Contents** (read; read & write only for drift fix PRs) and
+   organization **Members** (read). The [server README](../../packages/server/README.md#quick-start)
+   says what each one is for.
 2. Register `https://teriac.acme.dev/auth/oidc/callback` as the redirect URI with Okta.
 3. Check the install with `helm test teriac -n teriac`.
 
@@ -90,6 +94,7 @@ HttpOnly cookies. The chart generates the signing key once and keeps it across u
 | `extraEnvFrom` / `extraEnv` | `[]` | Cloud credentials, `TERIAC_SLACK_TOKEN`, `TERIAC_TEAMS_WEBHOOK`, `GITHUB_TOKEN` (for OpenTofu/Terragrunt downloads), … |
 | `serviceAccount.annotations` | `{}` | Workload identity: IRSA, GKE, Azure |
 | `persistence.size` | `20Gi` | Checkouts, saved plans, binaries, provider cache, database |
+| `backup.enabled` | `false` | Back up the database on `backup.schedule` (cron) to the backend you fill in: `backup.backend.s3.bucket`, `backup.backend.gcs.bucket` or `backup.backend.azure.container`. Old backups: a lifecycle rule on the bucket. An empty volume is restored on start. See [Backups](../../packages/server/README.md#backups) |
 | `serviceMonitor.enabled` | `false` | Prometheus scraping of `/metrics` |
 | `podDisruptionBudget.enabled` | `false` | Stop node drains from interrupting an apply |
 | `networkPolicy.enabled` | `false` | Allow inbound traffic only from `networkPolicy.ingressFrom` |

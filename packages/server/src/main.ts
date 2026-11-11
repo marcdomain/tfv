@@ -1,6 +1,6 @@
 // teriac-server entry point.
 import { join } from 'node:path';
-import { mkdirSync } from 'node:fs';
+import { existsSync, mkdirSync } from 'node:fs';
 import { loadConfig } from './config.ts';
 import { log, addSecret, addSecretsFromEnv } from './log.ts';
 
@@ -33,7 +33,27 @@ const { Avatars } = await import('./avatars.ts');
 const { GrantWatcher } = await import('./grants.ts');
 const { SummaryScheduler } = await import('./summary.ts');
 
-const store = new Store(join(config.dataDir, 'teriac.db'));
+const { BackupScheduler, cleanLeftovers, destination, rcloneRemote, restoreLatest } = await import('./backup.ts');
+const { notifyText } = await import('./notify.ts');
+
+// Backups: remove what an interrupted backup or restore left, then restore an empty volume
+// from the newest usable backup before the database opens.
+const dbPath = join(config.dataDir, 'teriac.db');
+cleanLeftovers(config.dataDir);
+const remote = config.backup ? rcloneRemote(config.backup) : undefined;
+if (config.backup && remote && !existsSync(dbPath)) {
+  const where = destination(config.backup);
+  try {
+    const r = await restoreLatest(remote, dbPath, where);
+    if (r.restored) log.info('database restored from backup', { from: where, backup: r.restored, skipped: r.skipped.length });
+    else log.warn('no backups found; starting with an empty database', { at: where });
+  } catch (err) {
+    log.error(`teriac-server cannot start: ${(err as Error).message}`);
+    process.exit(1);
+  }
+}
+
+const store = new Store(dbPath);
 const app = new App({ config, store, resolver: teriacResolver(config.defaultVersion) });
 const adapters = { github: config.github ? new GitHubAdapter(config.github) : undefined };
 const drift = new DriftScheduler({
@@ -63,6 +83,12 @@ const chat = { channels: config.channels, people: config.people, env: process.en
 const grantNotices = { store, cfg: config.breakGlass, ...chat };
 const grants = new GrantWatcher(grantNotices);
 const summary = new SummaryScheduler({ store, cfg: config.summary, ...chat });
+const backups = config.backup && remote ? new BackupScheduler({
+  cfg: config.backup, store, remote, dataDir: config.dataDir,
+  notify: config.backup.notify.length
+    ? (title, lines) => notifyText(config.backup!.notify, config.channels, { title, lines, event: 'teriac.backup', url: `${config.publicUrl}/#guardrails` }, { people: config.people, env: process.env })
+    : undefined,
+}) : undefined;
 
 let ready = false;
 let stopping = false;
@@ -73,6 +99,8 @@ const server = createHttpServer({
   avatars: new Avatars(config.dataDir, config.github ? { [config.github.host]: 'github' } : {}),
   oidc: config.auth.oidc ? new Oidc(config.auth.oidc, config.publicUrl) : undefined,
   grants: grantNotices,
+  backups,
+  config,
   ready: () => ready && !stopping,
 });
 addSecret(config.auth.apiToken);
@@ -86,6 +114,7 @@ server.listen(config.port, () => {
   if (process.env.TERIAC_DRIFT !== 'false') drift.start();
   grants.start();
   summary.start();
+  backups?.start();
   log.info('teriac-server listening', { port: config.port, dataDir: config.dataDir, repos: config.repos.map(r => r.id) });
 });
 
@@ -108,7 +137,8 @@ const shutdown = async (signal: string) => {
   drift.stop();
   grants.stop();
   summary.stop();
-  await Promise.all([app.idle(), drift.idle()]);
+  backups?.stop();
+  await Promise.all([app.idle(), drift.idle(), backups?.idle()]);
   store.close();
   process.exit(0);
 };

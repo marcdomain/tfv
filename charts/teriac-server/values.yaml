@@ -10,6 +10,16 @@ image:
   pullPolicy: IfNotPresent
 imagePullSecrets: []
 
+# The GitHub App teriac acts as. Its permissions (App settings → Permissions and events):
+#   Repository  Checks         read & write   check runs, the Apply button, code annotations
+#   Repository  Contents       read           clone, teriac.yaml, CODEOWNERS, out-of-date checks
+#                              read & write   only if a drift schedule sets fix_pr: true
+#   Repository  Issues         read & write   PR comments and reactions
+#   Repository  Pull requests  read & write   changed files, approvals, opening drift fix PRs
+#   Repository  Metadata       read           (always on)
+#   Organization Members       read           team: rules (approvers, permissions, override, grantors)
+# Events: Pull request, Issue comment, Check run. Webhook URL: https://<host>/events/github
+# After changing permissions, an org owner accepts them under the org's Installed GitHub Apps.
 github:
   appId: ""                     # required
   apiUrl: ""                    # GitHub Enterprise Server, e.g. https://ghe.acme.com/api/v3
@@ -156,6 +166,54 @@ persistence:
   storageClass: ""
   accessModes: [ReadWriteOnce]
   existingClaim: ""
+
+# Scheduled backups of the database (runs, locks, audit log, drift history, metrics).
+# Only at the scheduled times: the server copies its database, gzips it, uploads it, and
+# deletes the local copy, so nothing piles up on the volume. Needs free space on the
+# volume about the size of the database while a backup runs.
+#
+# teriac never deletes backups. To remove old ones, add a lifecycle rule (expiration) to
+# the bucket for this path. Every backup is a whole database on its own, so expiring old
+# ones never breaks newer ones. Keep the expiry well above the time between backups
+# (daily backups: 7 days or more), so there is always a recent one to restore.
+#
+# On start, an empty volume (a new PVC, or persistence.enabled: false) is restored from
+# the newest backup that passes an integrity check; a broken or just-expired one is
+# skipped for the one before. A volume that already has a database is kept as is. If the
+# bucket can't be read (wrong credentials or name), the pod doesn't start, rather than
+# start empty.
+#
+# Bucket permissions:
+#   s3:    s3:ListBucket on the bucket, s3:GetObject and s3:PutObject on <path>/*
+#          (plus kms:GenerateDataKey and kms:Decrypt for SSE-KMS buckets)
+#   gcs:   roles/storage.objectUser on the bucket (or objectCreator + objectViewer)
+#   azure: Storage Blob Data Contributor on the container
+backup:
+  enabled: false
+  schedule: "0 3 * * *"         # cron: minute hour day month weekday ("0 */6 * * *": every 6 hours)
+  timezone: UTC                 # time zone of the schedule, e.g. Europe/Madrid
+  # Where backups go: fill in one of s3, gcs or azure. The one you fill in is used.
+  backend:
+    s3:                         # AWS S3, or an S3-compatible service (MinIO, Cloudflare R2, Backblaze B2, …)
+      bucket: ""                # bucket name only; folders go in path
+      path: ""                  # folder in the bucket; default teriac/<namespace>/<release>, so installs never mix
+      region: ""                # e.g. eu-west-1
+      endpoint: ""              # only for S3-compatible services, e.g. https://minio.acme.dev
+      storageClass: ""          # e.g. STANDARD_IA
+    gcs:                        # Google Cloud Storage
+      bucket: ""
+      path: ""
+    azure:                      # Azure Blob Storage
+      accountName: ""           # storage account name
+      container: ""
+      path: ""
+    # Credentials. Leave empty to sign in as the pod: IRSA or EKS Pod Identity (annotate the
+    # serviceAccount), GKE Workload Identity, or Azure Workload Identity. Or name a Secret with:
+    #   s3:    access-key-id, secret-access-key
+    #   gcs:   credentials.json (a service account key)
+    #   azure: account-key
+    existingSecret: ""
+  notify: []                    # channels from repos.yaml told when a backup fails, and when backups work again
 
 service:
   type: ClusterIP

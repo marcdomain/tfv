@@ -40,19 +40,27 @@ const scheduledStart = (w: FreezeWindow, now: Date): Date | null => {
 
 export interface ActiveFreeze { name: string; until: string; override: string[] }
 
+// When a window that is on now ends (in its time zone), or null when it's off.
+export const windowUntil = (w: FreezeWindow, now = new Date()): string | null => {
+  const tz = w.timezone ?? 'UTC';
+  if (w.schedule) {
+    const start = scheduledStart(w, now);
+    return start ? `${fmt(new Date(start.getTime() + w.hours! * 3_600_000), tz)} ${tz}` : null;
+  }
+  if (w.from && w.to) {
+    const today = dayIn(now, tz);
+    return today >= w.from && today <= w.to ? `end of ${w.to} ${tz}` : null;
+  }
+  return null;
+};
+
 // Freezes on now for this project, with when each ends (in the window's time zone).
 export const activeFreezes = (cfg: FreezeConfig | undefined, project: { name: string; dir: string }, now = new Date()): ActiveFreeze[] => {
   const out: ActiveFreeze[] = [];
   for (const w of cfg ?? []) {
     if (!projectMatches(w.projects, project)) continue;
-    const tz = w.timezone ?? 'UTC';
-    if (w.schedule) {
-      const start = scheduledStart(w, now);
-      if (start) out.push({ name: w.name, until: `${fmt(new Date(start.getTime() + w.hours! * 3_600_000), tz)} ${tz}`, override: w.override ?? [] });
-    } else if (w.from && w.to) {
-      const today = dayIn(now, tz);
-      if (today >= w.from && today <= w.to) out.push({ name: w.name, until: `end of ${w.to} ${tz}`, override: w.override ?? [] });
-    }
+    const until = windowUntil(w, now);
+    if (until) out.push({ name: w.name, until, override: w.override ?? [] });
   }
   return out;
 };

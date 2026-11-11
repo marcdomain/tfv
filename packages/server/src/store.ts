@@ -156,6 +156,10 @@ CREATE TABLE IF NOT EXISTS grants (
   created_at TEXT NOT NULL, expires_at TEXT NOT NULL, revoked_at TEXT, revoked_by TEXT, used_at TEXT,
   expiry_noted INTEGER NOT NULL DEFAULT 0
 );
+CREATE TABLE IF NOT EXISTS backups (
+  id INTEGER PRIMARY KEY AUTOINCREMENT, at TEXT NOT NULL, trigger TEXT NOT NULL, ok INTEGER NOT NULL,
+  name TEXT, bytes INTEGER, seconds REAL NOT NULL, error TEXT
+);
 CREATE TABLE IF NOT EXISTS audit (
   id INTEGER PRIMARY KEY AUTOINCREMENT, at TEXT NOT NULL, repo TEXT NOT NULL, pr INTEGER NOT NULL,
   user TEXT NOT NULL, action TEXT NOT NULL, project TEXT NOT NULL, allowed INTEGER NOT NULL, reason TEXT NOT NULL
@@ -220,6 +224,27 @@ export class Store {
   }
 
   close() { this.db.close(); }
+
+  // ---- backups ----
+
+  // A complete copy of the database in one file, safe while runs are writing.
+  backupTo(file: string): void {
+    this.db.prepare('VACUUM INTO ?').run(file);
+  }
+
+  recordBackup(r: { at: string; trigger: 'schedule' | 'manual'; ok: boolean; name: string | null; bytes: number | null; seconds: number; error: string | null }) {
+    const info = this.db.prepare('INSERT INTO backups (at, trigger, ok, name, bytes, seconds, error) VALUES (?, ?, ?, ?, ?, ?, ?)')
+      .run(r.at, r.trigger, r.ok ? 1 : 0, r.name, r.bytes, r.seconds, r.error);
+    // Only the recent history matters; keep the table small.
+    this.db.prepare('DELETE FROM backups WHERE id <= ?').run(Number(info.lastInsertRowid) - 500);
+    return { id: Number(info.lastInsertRowid), ...r };
+  }
+
+  recentBackups(limit = 20) {
+    return (this.db.prepare('SELECT * FROM backups ORDER BY id DESC LIMIT ?').all(limit) as Record<string, any>[]).map(b => ({
+      id: b.id, at: b.at, trigger: b.trigger, ok: b.ok === 1, name: b.name, bytes: b.bytes, seconds: b.seconds, error: b.error,
+    }));
+  }
 
   // ---- locks ----
 

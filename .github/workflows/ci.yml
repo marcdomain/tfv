@@ -87,12 +87,28 @@ jobs:
           # Missing required values must fail with a clear message.
           if helm template t charts/teriac-server > /dev/null 2> err.txt; then echo "expected a failure"; exit 1; fi
           grep -q 'github.appId is required' err.txt
+          # Backup mistakes are refused at install, each with its own message.
+          base="--set github.appId=1 --set github.existingSecret=s --set config.repoAllowlist={github.com/acme/*} --set backup.enabled=true"
+          refused() { # refused <message> <flags...>
+            local want="$1"; shift
+            if helm template t charts/teriac-server $base "$@" > /dev/null 2> err.txt; then echo "expected a failure: $want"; exit 1; fi
+            grep -q "$want" err.txt || { cat err.txt; exit 1; }
+          }
+          refused 'no backend is set'
+          refused 'set only one of s3, gcs or azure' --set backup.backend.s3.bucket=a --set backup.backend.gcs.bucket=b
+          refused 'must be the name only' --set backup.backend.s3.bucket=a/b
+          refused 'must be a cron expression with 5 fields' --set backup.backend.s3.bucket=b --set backup.schedule=24h
+          refused 'backup.backend.azure.accountName is required' --set backup.backend.azure.container=c
+          refused 'may not contain' --set backup.backend.gcs.bucket=b --set backup.backend.gcs.path=a/../b
 
       - name: Build image
         run: docker build -t teriac-server:ci .
 
       - name: End-to-end (mock GitHub, real git and terraform)
         run: packages/server/e2e/run.sh teriac-server:ci
+
+      - name: End-to-end backups (real rclone, local S3 server)
+        run: packages/server/e2e/backup.sh teriac-server:ci
 
       # kind installed directly, version pinned and checksum verified. Downloads are
       # authenticated (gh + the workflow token), since GitHub sometimes times out
@@ -141,6 +157,27 @@ jobs:
           curl -sf -X POST localhost:8080/auth/login -H 'X-Requested-With: teriac' -H 'Content-Type: application/json' \
             -d '{"username":"ci","password":"ci-admin-password"}' | grep -q '"role":"admin"'
           kubectl -n teriac logs statefulset/teriac-teriac-server | tail -20
+
+      - name: Backups on kind (in-cluster S3 server; lose the PVC, restore)
+        run: |
+          kubectl -n teriac create secret generic backup-keys --from-literal=access-key-id=AKIDCI --from-literal=secret-access-key=ci-secret-0123456789
+          kubectl -n teriac run s3 --image=teriac-server:ci --image-pull-policy=Never --port=9000 --command -- \
+            sh -c 'mkdir -p /tmp/s3/backups && exec rclone serve s3 --auth-key AKIDCI,ci-secret-0123456789 --addr :9000 --dir-cache-time 1s /tmp/s3'
+          kubectl -n teriac expose pod s3 --port=9000
+          kubectl -n teriac wait --for=condition=Ready pod/s3 --timeout=60s
+          helm upgrade teriac charts/teriac-server -n teriac --reuse-values --wait --timeout 3m \
+            --set backup.enabled=true --set 'backup.schedule=* * * * *' --set backup.backend.s3.bucket=backups \
+            --set backup.backend.s3.endpoint=http://s3.teriac.svc:9000 --set backup.backend.s3.region=us-east-1 --set backup.backend.existingSecret=backup-keys
+          logs() { kubectl -n teriac logs teriac-teriac-server-0 2>/dev/null; }
+          waitlog() { for _ in $(seq 1 60); do logs | grep -q "$1" && return 0; sleep 3; done; logs | tail -20; echo "no \"$1\" in the logs"; exit 1; }
+          waitlog 'backup uploaded'
+          kubectl -n teriac exec s3 -- ls /tmp/s3/backups/teriac/teriac/teriac
+          test -z "$(kubectl -n teriac exec teriac-teriac-server-0 -- sh -c 'ls -A /data | grep -E "^\.(backup|restore)-" || true')"
+          # Lose the volume: the new pod is restored from the bucket.
+          kubectl -n teriac delete pvc data-teriac-teriac-server-0 --wait=false
+          kubectl -n teriac delete pod teriac-teriac-server-0
+          kubectl -n teriac rollout status statefulset/teriac-teriac-server --timeout=3m
+          waitlog 'database restored from backup'
 
   package:
     runs-on: ubuntu-latest

@@ -20,7 +20,7 @@
 
 Everything lives in `~/.teriac/`; upgrading `teriac` itself never touches your installed versions.
 
-![teriac demo](https://raw.githubusercontent.com/marcdomain/teriac/main/demo.gif)
+![teriac CLI: signed installs, OpenTofu and Terragrunt, switching versions, auto-switch on cd, pinning, plan and apply by file, and doctor](https://raw.githubusercontent.com/marcdomain/teriac/main/demo.gif)
 
 
 ---

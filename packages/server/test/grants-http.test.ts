@@ -103,3 +103,27 @@ test('without break_glass in repos.yaml, granting is off', async () => {
   assert.equal((await (await fetch(`${url}/api/grants`, { headers: { Authorization: `Bearer ${auth.apiToken}` } })).json()).enabled, false);
   off.close();
 });
+
+test('the Guardrails page: freezes with whether they are on, protected resources, repo settings', async () => {
+  const today = new Date().toISOString().slice(0, 10);
+  const config = {
+    repos: [{ id: 'github.com/acme/live', stale_base: 'block', freezes: [{ name: 'launch', from: today, to: today, override: ['team:sre'] }] }, { id: 'github.com/acme/*' }],
+    freezes: [{ name: 'holidays', from: '2000-12-23', to: '2001-01-02' }],
+    protected: [{ resources: ['aws_db_instance.*'] }],
+    secretScan: { mode: 'fail', patterns: [{ name: 'acme', regex: 'acme_[0-9]+' }] },
+  } as any;
+  const s = createHttpServer({ app: { runQueue: null } as any, store, adapters: {}, auth, ready: () => true, config });
+  await new Promise<void>(r => s.listen(0, '127.0.0.1', () => r()));
+  const url = `http://127.0.0.1:${(s.address() as AddressInfo).port}`;
+  const vic = await (async () => {
+    const res = await fetch(`${url}/auth/login`, { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Requested-With': 'teriac' }, body: JSON.stringify({ username: 'vic', password: 'pw-vic-123' }) });
+    return res.headers.getSetCookie().map(c => c.split(';')[0]).join('; ');
+  })();
+  const g = await (await fetch(`${url}/api/safety`, { headers: { Cookie: vic } })).json();
+  assert.deepEqual(g.freezes.map((w: any) => [w.name, w.scope, Boolean(w.until)]), [['holidays', 'every repo', false], ['launch', 'github.com/acme/live', true]]);
+  assert.deepEqual(g.protected[0], { scope: 'every repo', projects: [], resources: ['aws_db_instance.*'], override: [] });
+  assert.deepEqual(g.secretScan, { mode: 'fail', patterns: ['acme'] }, 'pattern names only, not the regexes');
+  assert.deepEqual(g.repos.map((r: any) => [r.id, r.staleBase, r.verifyPlan]), [['github.com/acme/live', 'block', true], ['github.com/acme/*', 'warn', true]]);
+  assert.equal((await fetch(`${url}/api/safety`)).status, 401, 'needs sign-in');
+  s.close();
+});
