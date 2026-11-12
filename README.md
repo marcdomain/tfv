@@ -34,7 +34,7 @@ Everything lives in `~/.teriac/`; upgrading `teriac` itself never touches your i
 
 ## teriac server
 
-![teriac server: the PR comment, Terraform commands, the apply report, and the dashboard with runs, date ranges, metrics, resource usage and unlocking](https://raw.githubusercontent.com/marcdomain/teriac/main/charts/teriac-server/docs/flow.gif)
+![teriac server: install with Helm or Docker, the PR comment with risk and approvals, apply, and the dashboard with runs, guardrails, backups, metrics and unlocking](https://raw.githubusercontent.com/marcdomain/teriac/main/charts/teriac-server/docs/flow.gif)
 
 A self-hosted service for pull requests. It plans every project a pull request changes, posts
 one clear comment, and applies when someone comments `teriac apply`:

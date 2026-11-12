@@ -4,7 +4,7 @@ Runs [teriac server](../../packages/server/README.md) on Kubernetes. It's pull r
 for Terraform, OpenTofu and Terragrunt, with per-project RBAC and approvers, drift alerts, and a
 dashboard.
 
-![teriac server: the PR comment, Terraform commands, the apply report, and the dashboard with runs, date ranges, metrics, resource usage and unlocking](docs/flow.gif)
+![teriac server: install with Helm or Docker, the PR comment with risk and approvals, apply, and the dashboard with runs, guardrails, backups, metrics and unlocking](docs/flow.gif)
 
 ## Install
 
