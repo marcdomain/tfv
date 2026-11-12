@@ -1,15 +1,25 @@
-# teriac — one CLI for Terraform, OpenTofu & Terragrunt on macOS, Linux & Windows
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/marcdomain/teriac/main/brand/teriac-logo-dark.png">
+    <img alt="teriac" src="https://raw.githubusercontent.com/marcdomain/teriac/main/brand/teriac-logo.png" width="300">
+  </picture>
+</p>
 
-```text
-       _                _
-      | |_   ___  _ __ (_)  __ _   ___
-      | __| / _ \| '__|| | / _' | / __|
-      | |_ |  __/| |   | || (_| || (__
-       \__| \___||_|   |_| \__,_| \___|
+# teriac: Terraform, OpenTofu & Terragrunt, from your laptop to your pull requests
 
-          Happy terraforming! 😍🥂
-      ---------------------------------
-```
+teriac comes in two parts. Use either one, or both together:
+
+| | **teriac CLI** | **teriac server** |
+|---|---|---|
+| **For** | Your machine: macOS, Linux and Windows | Your team's pull requests on GitHub |
+| **Does** | Installs and switches versions, plans and applies, gives each project its version | Plans every pull request, applies when people ask, with permissions, approvals and guardrails |
+| **Get it** | `npm install -g @marcdomain/teriac` | [Helm chart or Docker image](https://github.com/marcdomain/teriac/blob/main/packages/server/README.md#quick-start) |
+
+---
+
+## teriac CLI
+
+![teriac CLI: signed installs, OpenTofu and Terragrunt, switching versions, auto-switch on cd, pinning, plan and apply by file, and doctor](https://raw.githubusercontent.com/marcdomain/teriac/main/demo.gif)
 
 `teriac` is one command for **Terraform**, **OpenTofu** and **Terragrunt**, with no `sudo`:
 
@@ -18,10 +28,36 @@
 - **Runs:** `teriac plan`, `apply`, `destroy`, `init`, `fmt` and `validate`, with targets taken from files, and `teriac exec` to run one command with any version.
 - **Speed and health:** a shared provider cache across projects, and `teriac doctor` to check the setup.
 
-Everything lives in `~/.teriac/`; upgrading `teriac` itself never touches your installed versions.
+Everything lives in `~/.teriac/`; upgrading `teriac` itself never touches your installed versions. [Install it](#installation).
 
-![teriac CLI: signed installs, OpenTofu and Terragrunt, switching versions, auto-switch on cd, pinning, plan and apply by file, and doctor](https://raw.githubusercontent.com/marcdomain/teriac/main/demo.gif)
+---
 
+## teriac server
+
+![teriac server: install with Helm or Docker, the PR comment with risk and approvals, apply, and the dashboard with runs, guardrails, backups, metrics and unlocking](https://raw.githubusercontent.com/marcdomain/teriac/main/charts/teriac-server/docs/flow.gif)
+
+A self-hosted service for pull requests. It plans every project a pull request changes, posts
+one clear comment, and applies when someone comments `teriac apply`:
+
+- **Readable PR comments:** a table of what each project adds, changes and destroys, its risk, and what still blocks it; check runs with an **Apply** button and notes on the risky lines.
+- **Who can do what:** per-project permissions and required approvals from your GitHub users and teams, a fresh approval after new commits, and only the reviewed plan is applied.
+- **Guardrails:** built-in AWS security rules and your own policies, change freezes, protected resources, a leaked-secret scan, and emergency access that expires on its own.
+- **Terragrunt and OpenTofu built in:** dependencies run in order, and only the affected units run.
+- **Drift:** scheduled checks that name who changed what, alerts in Slack, Teams, Discord or Google Chat, and optional fix PRs.
+- **Dashboard:** runs, locks, drift, the audit log, guardrails, and delivery metrics (PR to applied, failure rate, time to fix), plus a weekly summary in chat.
+- **Easy to run:** a Helm chart or one Docker image (signed, amd64 and arm64), with scheduled database backups to S3, GCS or Azure.
+
+```sh
+kubectl create namespace teriac
+kubectl -n teriac create secret generic teriac-github \
+  --from-file=private-key=app.pem --from-literal=webhook-secret="$WEBHOOK_SECRET"
+helm install teriac oci://ghcr.io/marcdomain/charts/teriac-server -n teriac \
+  --set github.appId=123456 --set github.existingSecret=teriac-github \
+  --set 'config.repoAllowlist={github.com/acme/*}'
+```
+
+Setting up the GitHub App, PR commands and every setting: the [server guide](https://github.com/marcdomain/teriac/blob/main/packages/server/README.md).
+Helm values: the [chart guide](https://github.com/marcdomain/teriac/blob/main/charts/teriac-server/README.md).
 
 ---
 
@@ -458,4 +494,15 @@ Everything works on Windows without administrator privileges:
 ```sh
 teriac --help
 teriac <command> --help
+```
+
+```text
+       _                _
+      | |_   ___  _ __ (_)  __ _   ___
+      | __| / _ \| '__|| | / _' | / __|
+      | |_ |  __/| |   | || (_| || (__
+       \__| \___||_|   |_| \__,_| \___|
+
+          Happy terraforming! 😍🥂
+      ---------------------------------
 ```
