@@ -94,6 +94,17 @@ export const exec = (
   child.on('close', code => { clearTimeout(timer); resolve({ code: code ?? 1, output: redact(output), stdout, usage: sampler?.stop() ?? null }); });
 });
 
+// Git settings, as env vars, that send `auth`'s header to its host: Terraform's
+// `git::https://` module downloads then sign in, and nothing is written to disk. Left out
+// when the server's env already sets GIT_CONFIG_* (your own module credentials win).
+export const gitAuthEnv = (base: NodeJS.ProcessEnv, auth: { url: string; extraHeader?: string } | null | undefined): Record<string, string> => {
+  if (!auth?.extraHeader || base.GIT_CONFIG_COUNT) return {};
+  let origin: string;
+  try { origin = new URL(auth.url).origin; } catch { return {}; }
+  if (!/^https?:/.test(origin)) return {};
+  return { GIT_CONFIG_COUNT: '1', GIT_CONFIG_KEY_0: `http.${origin}/.extraheader`, GIT_CONFIG_VALUE_0: auth.extraHeader };
+};
+
 // Env for terraform/terragrunt: the server's env minus its own settings and
 // secrets (anything TERIAC_*), plus automation flags and PR context.
 export const toolEnv = (base: NodeJS.ProcessEnv, extra: Record<string, string>): NodeJS.ProcessEnv => {

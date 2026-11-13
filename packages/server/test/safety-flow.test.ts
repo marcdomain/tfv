@@ -31,6 +31,7 @@ const F = ${JSON.stringify(F)};
 const [cmd, ...rest] = process.argv.slice(2);
 if (cmd === 'init') { console.log('Terraform has been successfully initialized!'); process.exit(0); }
 if (cmd === 'plan') {
+  fs.writeFileSync('GIT_ENV', JSON.stringify(Object.fromEntries(Object.entries(process.env).filter(([k]) => k.startsWith('GIT_CONFIG')))));
   const out = rest.find(a => a.startsWith('-out=')).slice(5);
   fs.writeFileSync(out, fs.existsSync('SECURITY') ? 'security' : 'changes');
   process.stdout.write(fs.readFileSync(path.join(F, 'plan-changes.txt')));
@@ -65,6 +66,7 @@ class FakeGitHub implements VcsAdapter {
   // changes since the PR left it (head = main).
   prFiles = new Map<string, Comparison>();
   baseChanges: Comparison | null = null;
+  moduleAuth?: (r: Repo) => Promise<{ url: string; extraHeader?: string } | null>;
 
   verify() { return true; }
   parse(): VcsEvent { return { kind: 'ignored', reason: 'test' }; }
@@ -514,5 +516,48 @@ describe('remaining paths', () => {
     const app = setup('    secret_scan: off\n', { secretScan: { mode: 'fail' } }).app as any;
     const ctx = { policy: { secret_scan: 'off' }, rulesConfig: {} };
     assert.equal(app.safety(ctx).secretMode, 'fail');
+  });
+});
+
+// ---------------------------------------------------------------------------
+describe('git credentials for module downloads', () => {
+  const gitEnv = (dataDir: string) => JSON.parse(readFileSync(join(dataDir, 'work/github.com/acme/infra/1/envs/dev/GIT_ENV'), 'utf-8'));
+  const read = async () => ({ url: 'https://github.com/', extraHeader: 'Authorization: Basic cmVhZC1vbmx5' });
+
+  test('plans get the read-only token as a git header for the host', async () => {
+    const { gh, open, dataDir } = setup();
+    gh.moduleAuth = read;
+    await open();
+    assert.deepEqual(gitEnv(dataDir), { GIT_CONFIG_COUNT: '1', GIT_CONFIG_KEY_0: 'http.https://github.com/.extraheader', GIT_CONFIG_VALUE_0: 'Authorization: Basic cmVhZC1vbmx5' });
+    assert.doesNotMatch(gh.sticky.get(1) ?? gh.lastReply(), /cmVhZC1vbmx5/, 'never shown in the PR');
+  });
+
+  test('TERIAC_MODULE_AUTH=false: no credentials', async () => {
+    const { gh, open, dataDir } = setup('', { moduleAuth: false });
+    gh.moduleAuth = read;
+    await open();
+    assert.deepEqual(gitEnv(dataDir), {});
+  });
+
+  test('a failed token request still plans, without credentials', async () => {
+    const { gh, open, dataDir, store } = setup();
+    gh.moduleAuth = async () => { throw new Error('HTTP 502'); };
+    await open();
+    assert.deepEqual(gitEnv(dataDir), {});
+    assert.ok(store.latestRuns('github.com/acme/infra', 1, 'plan').every(r => r.status === 'success'));
+  });
+});
+
+describe('avatars in the comment', () => {
+  test('round, from the server, when GitHub can reach it; else GitHub\'s square photo', async () => {
+    const pub = setup('', { spinnerUrl: 'https://teriac.example.com/assets/spinner.gif' });
+    await pub.open();
+    const body = [...pub.gh.sticky.values(), ...pub.gh.comments.map(c => c.body)].join('\n');
+    assert.match(body, /<img src="https:\/\/teriac\.example\.com\/avatars\/round\/github\.com\/bob\.svg" width="18" height="18"/);
+    const priv = setup();
+    await priv.open();
+    const body2 = [...priv.gh.sticky.values(), ...priv.gh.comments.map(c => c.body)].join('\n');
+    assert.match(body2, /<img src="https:\/\/github\.com\/bob\.png\?size=36"/);
+    assert.doesNotMatch(body2, /avatars\/round/);
   });
 });

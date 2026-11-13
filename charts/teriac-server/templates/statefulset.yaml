@@ -95,6 +95,8 @@ spec:
               value: {{ .Values.config.logLevel | quote }}
             - name: TERIAC_VERIFY_SIGNATURES
               value: {{ .Values.config.verifySignatures | quote }}
+            - name: TERIAC_MODULE_AUTH
+              value: {{ .Values.config.moduleAuth | quote }}
             {{- if .Values.backup.enabled }}
             {{- $type := include "teriac.backupType" . }}
             {{- $sec := index .Values.backup.backend $type }}

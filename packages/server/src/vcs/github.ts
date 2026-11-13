@@ -49,7 +49,7 @@ export class GitHubAdapter implements VcsAdapter {
   readonly commentLimit = 65000;
   readonly supportsChecks = true;
 
-  private tokens = new Map<number, { token: string; expires: number }>();
+  private tokens = new Map<string, { token: string; expires: number }>();
   // RBAC lookups are cached briefly (plan: 5 minutes).
   private permCache = new TtlCache<Permission>(5 * 60_000);
   private teamCache = new TtlCache<boolean>(5 * 60_000);
@@ -95,22 +95,38 @@ export class GitHubAdapter implements VcsAdapter {
     if (!res.ok) return null;
     const [first] = await res.json() as { id: number; account?: { login?: string } }[];
     if (!first) return null;
-    return this.installationToken({ platform: 'github', host: this.cfg.host, owner: first.account?.login ?? '', name: '', fullName: `installation-${first.id}`, cloneUrl: '', installationId: first.id });
+    // Public downloads need no repository access: the token can only read metadata.
+    return this.installationToken({ platform: 'github', host: this.cfg.host, owner: first.account?.login ?? '', name: '', fullName: `installation-${first.id}`, cloneUrl: '', installationId: first.id }, { metadata: 'read' });
   }
 
-  private async installationToken(repo: Repo): Promise<string> {
+  // An installation token: with every permission the App has, or only `permissions`
+  // (GitHub narrows the token to those). Cached per installation and scope until 5
+  // minutes before it expires; tokens last an hour.
+  private async installationToken(repo: Repo, permissions?: Record<string, 'read' | 'write'>): Promise<string> {
     const id = await this.installationFor(repo);
-    const cached = this.tokens.get(id);
+    const key = `${id}:${permissions ? JSON.stringify(permissions) : 'all'}`;
+    const cached = this.tokens.get(key);
     if (cached && cached.expires - 5 * 60_000 > Date.now()) return cached.token;
     const res = await this.fetchImpl(`${this.cfg.apiUrl}/app/installations/${id}/access_tokens`, {
       method: 'POST',
-      headers: { Authorization: `Bearer ${appJwt(this.cfg.appId, this.cfg.privateKey)}`, Accept: 'application/vnd.github+json', 'User-Agent': 'teriac-server' },
+      headers: { Authorization: `Bearer ${appJwt(this.cfg.appId, this.cfg.privateKey)}`, Accept: 'application/vnd.github+json', 'User-Agent': 'teriac-server', ...(permissions ? { 'Content-Type': 'application/json' } : {}) },
+      ...(permissions ? { body: JSON.stringify({ permissions }) } : {}),
     });
     if (!res.ok) throw new Error(`GitHub App token request failed: HTTP ${res.status}`);
     const data = await res.json() as { token: string; expires_at: string };
     addSecret(data.token);
-    this.tokens.set(id, { token: data.token, expires: Date.parse(data.expires_at) });
+    this.tokens.set(key, { token: data.token, expires: Date.parse(data.expires_at) });
     return data.token;
+  }
+
+  // Git credentials for Terraform's module downloads (git::https://<host>/...): a token
+  // that can only read code, from the installation that owns the repo. Terraform runs
+  // the PR's code, so it never gets the App's full token.
+  async moduleAuth(repo: Repo): Promise<CloneAuth | null> {
+    const token = await this.installationToken(repo, { contents: 'read', metadata: 'read' });
+    const basic = Buffer.from(`x-access-token:${token}`).toString('base64');
+    addSecret(basic);
+    return { url: `https://${this.cfg.host}/`, extraHeader: `Authorization: Basic ${basic}` };
   }
 
   private async api<T = any>(repo: Repo, method: string, path: string, body?: unknown, okStatuses: number[] = []): Promise<{ status: number; data: T; next: string | null }> {

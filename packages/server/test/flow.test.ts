@@ -161,7 +161,7 @@ test('1. push → autoplan both projects, sticky comment + checks with Apply but
   assert.match(body, /\| \[`envs\/prod`\]\([^)]+\) \|.*\| 🔒 1 more approval from team:platform-admins \|/);
   // Rich parts: counts, who ran it (avatar + profile link, no @mention), next steps.
   assert.match(body, /<sub>🔒 2 waiting · 🔺 1 high risk<\/sub>/);
-  assert.match(body, /\| <img src="https:\/\/github\.com\/bob\.png\?size=36" width="18" height="18" align="center" alt=""> \[bob\]\(https:\/\/github\.com\/bob\) \|/);
+  assert.match(body, /\| <img src="https:\/\/teriac\.example\.com\/avatars\/round\/github\.com\/bob\.svg" width="18" height="18" align="center" alt=""> \[bob\]\(https:\/\/github\.com\/bob\) \|/);
   assert.doesNotMatch(body, /@bob/);
   assert.doesNotMatch(body, /- 🔒 \*\*`envs/, 'blockers are only in the table');
   assert.match(body, /\[Open in the teriac dashboard\]\(https:\/\/teriac\.example\.com\/#runs\/\d+\)/);
@@ -191,7 +191,7 @@ test('3. stale approvals do not count; fresh ones do', async () => {
   assert.deepEqual(applies.map(a => [a.project, a.status]), [['envs/dev', 'success']]);
   assert.doesNotMatch(applies[0].output, /LEAK/); // server secrets stripped from terraform's env
   assert.match(gh.sticky.get(1)!, /\| \[`envs\/dev`\]\([^)]+\) \|.*\| ✅ applied \|/);
-  assert.match(gh.sticky.get(1)!, /\*\*Approved by\*\* <img src="https:\/\/github\.com\/carol\.png\?size=36"[^>]*> \[carol\]\(https:\/\/github\.com\/carol\)/);
+  assert.match(gh.sticky.get(1)!, /\*\*Approved by\*\* <img src="https:\/\/teriac\.example\.com\/avatars\/round\/github\.com\/carol\.svg"[^>]*> \[carol\]\(https:\/\/github\.com\/carol\)/);
   assert.match(gh.sticky.get(1)!, /\| \[`envs\/prod`\]\([^)]+\) \|.*\| 🟢 ready · \[\*\*▶ Apply\*\*\]/);
 });
 

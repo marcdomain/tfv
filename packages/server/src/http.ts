@@ -14,7 +14,7 @@ import { isGrantor, parseGrantRequest, announce, grantText, type NotifyDeps } fr
 import { windowUntil } from './freeze.ts';
 import { destination, type BackupScheduler } from './backup.ts';
 import type { ServerConfig } from './config.ts';
-import { Avatars } from './avatars.ts';
+import { Avatars, roundAvatarSvg } from './avatars.ts';
 import {
   type AuthConfig, type Oidc, type Role, type Session, checkLogin, newSession, parseCookies, unsign,
   RateLimiter, cookie, SESSION_COOKIE, OIDC_COOKIE,
@@ -232,6 +232,17 @@ export const createHttpServer = (deps: HttpDeps): Server => {
     if (req.method === 'POST' && url.pathname === '/auth/logout') {
       res.setHeader('Set-Cookie', cookie(SESSION_COOKIE, '', auth, 0));
       return send(res, 200, { ok: true });
+    }
+
+    // Round avatars for PR comments: public (GitHub's image proxy fetches them), known hosts only.
+    const round = /^\/avatars\/round\/([^/]+)\/([^/]+)\.svg$/.exec(url.pathname);
+    if (req.method === 'GET' && round && deps.avatars) {
+      const host = decodeURIComponent(round[1]);
+      const login = decodeURIComponent(round[2]);
+      if (!/^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})$/.test(login) || !deps.avatars.knows(host)) return send(res, 404, { error: 'not found' });
+      const img = await deps.avatars.get(host, login);
+      res.writeHead(200, { 'Content-Type': 'image/svg+xml', 'Cache-Control': 'public, max-age=86400', 'X-Content-Type-Options': 'nosniff', 'Content-Security-Policy': "default-src 'none'; img-src data:; style-src 'unsafe-inline'" });
+      return res.end(roundAvatarSvg(login, img));
     }
 
     // Avatars, served from here (signed-in users only; known hosts only).

@@ -17,6 +17,21 @@ export const avatarSource = (platform: Platform, host: string, login: string): s
 export const avatarPath = (platform: Platform, host: string, login: string | null | undefined): string | null =>
   login && avatarSource(platform, host, login) ? `/avatars/${encodeURIComponent(host)}/${encodeURIComponent(login)}` : null;
 
+// A round version for PR comments, where GitHub strips CSS: the photo clipped to a
+// circle in a small SVG (or initials when there's no photo). Public, because GitHub's
+// image proxy fetches it; only for configured hosts, like the dashboard's avatars.
+export const roundAvatarPath = (host: string, login: string): string =>
+  `/avatars/round/${encodeURIComponent(host)}/${encodeURIComponent(login)}.svg`;
+
+export const roundAvatarSvg = (login: string, img: { type: string; body: Buffer } | null): string => {
+  const size = 40;
+  const clip = `<clipPath id="c"><circle cx="${size / 2}" cy="${size / 2}" r="${size / 2}"/></clipPath>`;
+  const inner = img
+    ? `<image href="data:${img.type};base64,${img.body.toString('base64')}" width="${size}" height="${size}" clip-path="url(#c)" preserveAspectRatio="xMidYMid slice"/>`
+    : `<circle cx="${size / 2}" cy="${size / 2}" r="${size / 2}" fill="#6366f1"/><text x="50%" y="54%" text-anchor="middle" dominant-baseline="middle" font-family="-apple-system,Segoe UI,Helvetica,Arial,sans-serif" font-size="18" font-weight="600" fill="#fff">${(login[0] ?? '?').toUpperCase().replace(/[^A-Z0-9]/, '?')}</text>`;
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="${size}" height="${size}" viewBox="0 0 ${size} ${size}"><defs>${clip}</defs>${inner}</svg>`;
+};
+
 export class Avatars {
   private dir: string;
   private hosts: Record<string, Platform>;
@@ -28,6 +43,8 @@ export class Avatars {
     this.hosts = hosts;
     this.fetchImpl = fetchImpl;
   }
+
+  knows(host: string) { return Boolean(this.hosts[host]); }
 
   // Only hosts teriac is configured for: never an open image proxy.
   async get(host: string, login: string): Promise<{ type: string; body: Buffer } | null> {

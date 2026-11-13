@@ -44,6 +44,7 @@ config:
   publicUrl: ""                 # defaults to the first ingress host
   logLevel: info
   verifySignatures: true        # check vendor signatures on downloaded Terraform/OpenTofu/Terragrunt; false for mirrors without .sig files
+  moduleAuth: true              # Terraform's git::https:// module downloads sign in with a read-only App token (private modules work); false to turn off
 
 # Contents of repos.yaml: rules, approvers, channels, people, drift schedules, and the
 # safety settings (risk, freezes, protected resources, secret scan, emergency access,

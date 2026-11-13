@@ -89,6 +89,7 @@ HttpOnly cookies. The chart generates the signing key once and keeps it across u
 | `config.commentMode` | `new` | `new`: a new comment for each plan and apply. `update`: one comment at the top, edited in place |
 | `config.parallelism` | `4` | Plans and applies running at once, shared fairly between PRs |
 | `config.preinstall` | `[]` | e.g. `[terraform@1.9.8, tofu@1.8.5]` |
+| `config.moduleAuth` | `true` | Terraform's `git::https://` module downloads sign in with a read-only App token, so private modules in your org work. `false` to turn off |
 | `config.verifySignatures` | `true` | Check the vendor's signature on downloaded Terraform, OpenTofu and Terragrunt; `false` for mirrors without `.sig` files |
 | `repos` | `{}` | Full `repos.yaml`: rules, approvers, channels, people, drift schedules |
 | `extraEnvFrom` / `extraEnv` | `[]` | Cloud credentials, `TERIAC_SLACK_TOKEN`, `TERIAC_TEAMS_WEBHOOK`, `GITHUB_TOKEN` (for OpenTofu/Terragrunt downloads), … |
