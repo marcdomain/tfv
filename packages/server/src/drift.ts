@@ -6,7 +6,7 @@ import type { ServerConfig, DriftSchedule, RepoPolicy } from './config.ts';
 import type { Repo, VcsAdapter } from './vcs/types.ts';
 import type { Store } from './store.ts';
 import type { ToolResolver } from './runner.ts';
-import { plan as runPlan, engineLabel, toolEnv } from './runner.ts';
+import { plan as runPlan, engineLabel, toolEnv, gitAuthEnv } from './runner.ts';
 import { checkoutBranch } from './git.ts';
 import { loadRepoConfig, loadRepoConfigFrom, emptyRepoConfig } from './repoConfig.ts';
 import { discoverProjects, type Project } from './discovery.ts';
@@ -158,11 +158,15 @@ export class DriftScheduler {
     const root = join(config.dataDir, 'drift', e.repo.host, e.repo.owner, e.repo.name, slug(e.branch));
     const auth = await e.adapter.cloneAuth(e.repo);
     const sha = await checkoutBranch(root, auth, e.branch);
+    // Read-only credentials for Terraform's git module downloads (TERIAC_MODULE_AUTH).
+    const moduleAuth = config.moduleAuth !== false && e.adapter.moduleAuth
+      ? await e.adapter.moduleAuth(e.repo).catch(err => { log.warn('no git credentials for module downloads', { repo: e.repo.fullName, err: (err as Error).message }); return null; })
+      : null;
     const repoConfig = e.policy.allow_repo_config === false ? emptyRepoConfig() : loadRepoConfig(root);
     const projects = discoverProjects(root, repoConfig)
       .filter(p => e.spec.projects.some(g => matchGlob(g, p.name) || matchGlob(g, p.dir)));
 
-    const findings = await Promise.all(projects.map(p => this.deps.limited(() => this.checkProject(e, root, auth, p, repoKey))));
+    const findings = await Promise.all(projects.map(p => this.deps.limited(() => this.checkProject(e, root, auth, p, repoKey, moduleAuth))));
 
     const report: DriftReport = {
       repo: e.repo.fullName, host: e.repo.host, branch: e.branch, sha, schedule: e.spec.name ?? e.spec.schedule,
@@ -216,7 +220,7 @@ export class DriftScheduler {
     }
   }
 
-  private async checkProject(e: ScheduleEntry, root: string, auth: Awaited<ReturnType<VcsAdapter['cloneAuth']>>, project: Project, repoKey: string): Promise<ProjectDrift> {
+  private async checkProject(e: ScheduleEntry, root: string, auth: Awaited<ReturnType<VcsAdapter['cloneAuth']>>, project: Project, repoKey: string, moduleAuth: Awaited<ReturnType<VcsAdapter['cloneAuth']>> | null = null): Promise<ProjectDrift> {
     const { config, store } = this.deps;
     const last = store.lastApply(repoKey, project.name);
     const lastApply = last ? { user: last.user, pr: last.pr, at: last.finishedAt ?? last.startedAt } : null;
@@ -226,6 +230,7 @@ export class DriftScheduler {
       engine = engineLabel(tools);
       const planDir = join(config.dataDir, 'drift-plans', e.repo.host, e.repo.owner, e.repo.name, slug(e.branch));
       const env = toolEnv(this.deps.env ?? process.env, {
+        ...gitAuthEnv(this.deps.env ?? process.env, moduleAuth),
         TF_PLUGIN_CACHE_DIR: join(config.dataDir, 'plugin-cache'),
         TERIAC_PROJECT: project.name, TERIAC_WORKSPACE: project.workspace, TERIAC_REPO: e.repo.fullName, TERIAC_BRANCH: e.branch,
       });

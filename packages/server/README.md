@@ -95,22 +95,28 @@ project again Only these commands run, and arguments are checked, so nothing els
 | `TERIAC_API_TOKEN` | | Admin token for automation and `/api` |
 | `TERIAC_DATA_DIR` | `/data` | Database, plans, checkouts and downloaded tools |
 | `TERIAC_PORT` | `8080` | HTTP port |
-| `TERIAC_PUBLIC_URL` | `http://localhost:<port>` | The address people and GitHub use, for links and the dashboard |
+| `TERIAC_PUBLIC_URL` | `http://localhost:<port>` | The address people and GitHub use, for links and the dashboard. With a public `https` address, PR comments show round profile pictures, served by teriac at `/avatars/round/…` (public, and only for your GitHub host); otherwise GitHub's square ones |
 | `TERIAC_GITHUB_API_URL` | `https://api.github.com` | GitHub Enterprise Server: `https://<host>/api/v3` |
 | `TERIAC_RUN_TIMEOUT_SECONDS` | `3600` | Longest one Terraform command may run |
 | `TERIAC_LOG_LEVEL` | `info` | `debug`, `info`, `warn` or `error` |
 | `TERIAC_SESSION_HOURS` | `12` | How long a dashboard sign-in lasts |
+| `TERIAC_MODULE_AUTH` | `true` | A read-only App token for Terraform's `git::https://` module downloads; see [Module sources](#settings) |
 | `TERIAC_VERIFY_SIGNATURES` | `true` | Check the vendor's signature on downloaded Terraform, OpenTofu and Terragrunt. `false` for mirrors that don't copy `.sig` files |
 | `TERIAC_BACKUP_ENABLED` | `false` | Scheduled database backups; see [Backups](#backups) for the `TERIAC_BACKUP_*` settings |
 
 `TERIAC_*` values are never passed to Terraform. Each secret can also be read from a file:
 `<NAME>_FILE` (for example `TERIAC_SESSION_SECRET_FILE`).
 
-**Module sources.** The image keeps only what the server runs (node, git, rclone), so it has
-no SSH client: use `git::https://` module sources. For private modules, give git a token
-with `extraEnv`, for example `GIT_CONFIG_COUNT=1`,
-`GIT_CONFIG_KEY_0=url.https://x-access-token:<token>@github.com/.insteadOf` and
-`GIT_CONFIG_VALUE_0=https://github.com/`.
+**Module sources.** Use `git::https://` module sources (the image has no SSH client). Private
+modules work with no setup: for each plan, apply and drift check, teriac asks the GitHub App for
+a token that can **only read code** (`contents: read`) and gives it to git as a header for your
+GitHub host. It never touches disk and lasts an hour. Terraform runs the PR's code, so it never
+gets the App's full token. The token reaches every repo the App is installed on, so anyone who can
+open a PR could read those repos during a plan; install the App only where that's fine, or set
+`TERIAC_MODULE_AUTH=false` (Helm: `config.moduleAuth: false`). To use your own credentials
+instead, set `GIT_CONFIG_*` with `extraEnv` (for example `GIT_CONFIG_COUNT=1`,
+`GIT_CONFIG_KEY_0=url.https://x-access-token:<token>@github.com/.insteadOf`,
+`GIT_CONFIG_VALUE_0=https://github.com/`); teriac then leaves git's settings alone.
 
 Terraform, scanners and scripts get the PR's details instead: `TERIAC_REPO`, `TERIAC_PR_NUMBER`,
 `TERIAC_HEAD_SHA`, `TERIAC_PROJECT`, `TERIAC_WORKSPACE` and `TERIAC_USER` (who ran the command).

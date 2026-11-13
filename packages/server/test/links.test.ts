@@ -95,3 +95,34 @@ test('avatars: only known hosts, cached, misses remembered', async () => {
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test('round avatars for PR comments: public SVG, photo clipped to a circle, initials without one', async () => {
+  const { Avatars, roundAvatarSvg, roundAvatarPath } = await import('../src/avatars.ts');
+  const { createHttpServer } = await import('../src/http.ts');
+  const { Store } = await import('../src/store.ts');
+  const { mkdtempSync } = await import('node:fs');
+  const { tmpdir } = await import('node:os');
+  const { join } = await import('node:path');
+  const png = Buffer.from([0x89, 0x50, 0x4e, 0x47, 1, 2, 3]);
+  assert.match(roundAvatarSvg('ada', { type: 'image/png', body: png }), /<clipPath id="c"><circle[^>]*\/><\/clipPath>.*<image href="data:image\/png;base64,iVBORwECAw==".*clip-path="url\(#c\)"/);
+  assert.match(roundAvatarSvg('ada', null), /<text[^>]*>A<\/text>/);
+  assert.equal(roundAvatarPath('github.com', 'ada'), '/avatars/round/github.com/ada.svg');
+
+  const avatars = new Avatars(mkdtempSync(join(tmpdir(), 'av-')), { 'github.com': 'github' }, async (u) =>
+    String(u).includes('/ada.png') ? new Response(png, { headers: { 'content-type': 'image/png' } }) : new Response('nope', { status: 404 }));
+  const store = new Store(':memory:');
+  const srv = createHttpServer({ app: { runQueue: null } as any, store, adapters: {}, ready: () => true, avatars,
+    auth: { apiToken: 't'.repeat(30), sessionSecret: 's'.repeat(32), sessionHours: 1, secureCookies: false, users: [] } as any });
+  await new Promise<void>(r => srv.listen(0, '127.0.0.1', () => r()));
+  const base = `http://127.0.0.1:${(srv.address() as import('node:net').AddressInfo).port}`;
+  const ada = await fetch(`${base}/avatars/round/github.com/ada.svg`);
+  assert.equal(ada.status, 200, 'no sign-in needed: GitHub fetches it');
+  assert.equal(ada.headers.get('content-type'), 'image/svg+xml');
+  assert.match(await ada.text(), /data:image\/png;base64,/);
+  assert.match(await (await fetch(`${base}/avatars/round/github.com/ghost.svg`)).text(), /<text[^>]*>G<\/text>/, 'initials when there is no photo');
+  assert.equal((await fetch(`${base}/avatars/round/evil.example/ada.svg`)).status, 404, 'only configured hosts');
+  assert.equal((await fetch(`${base}/avatars/round/github.com/a%22b.svg`)).status, 404, 'only valid usernames');
+  assert.equal((await fetch(`${base}/avatars/github.com/ada`)).status, 404, 'the dashboard avatars still need sign-in');
+  srv.close();
+  store.close();
+});

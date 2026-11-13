@@ -144,14 +144,52 @@ test('a repo with no installation id (dashboard, schedules) finds it once and re
 });
 
 test('download token: from any installation of the App, github.com only', async () => {
-  const fake: typeof fetch = async (url) => {
+  let body = '';
+  const fake: typeof fetch = async (url, init) => {
     const u = String(url);
     if (u.endsWith('/app/installations?per_page=1')) return new Response(JSON.stringify([{ id: 31, account: { login: 'acme' } }]));
-    if (u.endsWith('/app/installations/31/access_tokens')) return new Response(JSON.stringify({ token: 'ghs_dl', expires_at: new Date(Date.now() + 3600e3).toISOString() }));
+    if (u.endsWith('/app/installations/31/access_tokens')) { body = String(init?.body ?? ''); return new Response(JSON.stringify({ token: 'ghs_dl', expires_at: new Date(Date.now() + 3600e3).toISOString() })); }
     return new Response('{}', { status: 404 });
   };
   assert.equal(await new GitHubAdapter(cfg, fake).downloadToken(), 'ghs_dl');
+  assert.deepEqual(JSON.parse(body), { permissions: { metadata: 'read' } }, 'no access to any repository');
   assert.equal(await new GitHubAdapter({ ...cfg, host: 'github.acme.internal', apiUrl: 'https://github.acme.internal/api/v3' }, fake).downloadToken(), null, 'Enterprise App: not for github.com');
   const none: typeof fetch = async () => new Response('[]');
   assert.equal(await new GitHubAdapter(cfg, none).downloadToken(), null, 'not installed anywhere');
+});
+
+test('module downloads get a read-only token, cached apart from the full one', async () => {
+  const bodies: (string | null)[] = [];
+  let n = 0;
+  const fake: typeof fetch = async (url, init) => {
+    const u = String(url);
+    if (u.endsWith('/installation')) return new Response(JSON.stringify({ id: 5 }));
+    if (u.endsWith('/app/installations/5/access_tokens')) {
+      bodies.push(init?.body ? String(init.body) : null);
+      return new Response(JSON.stringify({ token: `ghs_${++n}`, expires_at: new Date(Date.now() + 3600e3).toISOString() }));
+    }
+    return new Response('{}', { status: 404 });
+  };
+  const repo = { platform: 'github' as const, host: 'github.com', owner: 'acme', name: 'infra', fullName: 'acme/infra', cloneUrl: 'https://github.com/acme/infra.git', installationId: 5 };
+  const a = new GitHubAdapter(cfg, fake);
+  const m = (await a.moduleAuth(repo))!;
+  assert.equal(m.url, 'https://github.com/');
+  assert.equal(Buffer.from(m.extraHeader!.replace('Authorization: Basic ', ''), 'base64').toString(), 'x-access-token:ghs_1');
+  assert.deepEqual(JSON.parse(bodies[0]!), { permissions: { contents: 'read', metadata: 'read' } });
+  await a.moduleAuth(repo);
+  assert.equal(bodies.length, 1, 'cached');
+  const clone = await a.cloneAuth(repo);
+  assert.equal(bodies.length, 2, 'the full token is a separate one');
+  assert.equal(bodies[1], null, 'with all of the App permissions');
+  assert.notEqual(clone.extraHeader, m.extraHeader);
+});
+
+test('git settings for module downloads: header for the host only; your own settings win', async () => {
+  const { gitAuthEnv } = await import('../src/runner.ts');
+  const auth = { url: 'https://github.com/', extraHeader: 'Authorization: Basic abc' };
+  assert.deepEqual(gitAuthEnv({}, auth), { GIT_CONFIG_COUNT: '1', GIT_CONFIG_KEY_0: 'http.https://github.com/.extraheader', GIT_CONFIG_VALUE_0: 'Authorization: Basic abc' });
+  assert.deepEqual(gitAuthEnv({ GIT_CONFIG_COUNT: '1' }, auth), {}, 'GIT_CONFIG_* from extraEnv takes over');
+  assert.deepEqual(gitAuthEnv({}, null), {});
+  assert.deepEqual(gitAuthEnv({}, { url: 'https://ghe.acme.dev/api/v3', extraHeader: 'h' }).GIT_CONFIG_KEY_0, 'http.https://ghe.acme.dev/.extraheader');
+  assert.deepEqual(gitAuthEnv({}, { url: 'git://x/y', extraHeader: 'h' }), {});
 });

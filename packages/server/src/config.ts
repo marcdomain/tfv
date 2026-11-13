@@ -142,6 +142,7 @@ export interface ServerConfig {
   ackReaction: Ack;                           // TERIAC_ACK_REACTION: reaction on the command (default eyes), or none
   progressReply: boolean;                     // TERIAC_PROGRESS_REPLY: spinning "Running…" reply, edited into the result (default off)
   commentMode: 'new' | 'update';              // TERIAC_COMMENT_MODE: a new comment per plan (default) or one updated comment
+  moduleAuth?: boolean;                       // TERIAC_MODULE_AUTH: read-only App token for git module downloads (default on)
   spinnerUrl: string | null;                  // animated icon GitHub can load; null → fall back to 👀
   github?: GitHubConfig;
   repos: RepoPolicy[];
@@ -322,6 +323,13 @@ export const parseReposYaml = (text: string): RepoPolicy[] => {
   return repos;
 };
 
+const parseBool = (v: string | undefined, name: string): boolean | undefined => {
+  const s = (v ?? '').trim().toLowerCase();
+  if (!s) return undefined;
+  if (s === 'true' || s === 'false') return s === 'true';
+  throw new Error(`${name} must be true or false, not "${v}"`);
+};
+
 export const loadConfig = (env: NodeJS.ProcessEnv = process.env): ServerConfig => {
   const dataDir = resolve(env.TERIAC_DATA_DIR || '/data');
   const port = Number(env.TERIAC_PORT || 8080);
@@ -382,6 +390,7 @@ export const loadConfig = (env: NodeJS.ProcessEnv = process.env): ServerConfig =
     ackReaction: parseReaction(env.TERIAC_ACK_REACTION, 'TERIAC_ACK_REACTION') ?? 'eyes',
     progressReply: env.TERIAC_PROGRESS_REPLY === 'true',
     commentMode: parseCommentMode(env.TERIAC_COMMENT_MODE, 'TERIAC_COMMENT_MODE') ?? 'new',
+    moduleAuth: parseBool(env.TERIAC_MODULE_AUTH, 'TERIAC_MODULE_AUTH') ?? true,
     spinnerUrl: spinnerUrlFor(publicUrl),
     github,
     repos,

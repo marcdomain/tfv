@@ -107,6 +107,8 @@ export interface VcsAdapter {
   getPullRequest(repo: Repo, number: number): Promise<PullRequestState>;
   changedFiles(repo: Repo, number: number): Promise<string[]>;
   cloneAuth(repo: Repo): Promise<CloneAuth>;
+  // Read-only git credentials for Terraform's module downloads from the platform (optional).
+  moduleAuth?(repo: Repo): Promise<CloneAuth | null>;
 
   // Edits the comment `knownId` (or else the one containing `marker`), or creates it.
   // Returns its id and web URL.

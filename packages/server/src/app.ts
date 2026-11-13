@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { createHash } from 'node:crypto';
 import { rmSync, mkdirSync, readFileSync, existsSync } from 'node:fs';
 import type { ServerConfig, RepoPolicy, Action } from './config.ts';
-import type { VcsAdapter, VcsEvent, Repo, PullRequestState, Comparison, Annotation } from './vcs/types.ts';
+import type { VcsAdapter, VcsEvent, Repo, PullRequestState, Comparison, Annotation, CloneAuth } from './vcs/types.ts';
 import { Store, type Run, type Grant } from './store.ts';
 import { parseCommand, helpText, toolArgs, TOOL_ACTION, EDITS_STATE, type Command } from './commands.ts';
 import { loadRepoConfig, loadRepoConfigFrom, emptyRepoConfig, type RepoConfig } from './repoConfig.ts';
@@ -14,8 +14,8 @@ import {
 } from './policy.ts';
 import { renderComment, renderCheck, renderApplyReport, parseApplyResult, providersOf, cmdBlock, fence, tail, type ProjectView, type CommentLinks } from './render.ts';
 import { repoLinks, platformForHost } from './links.ts';
-import { avatarSource } from './avatars.ts';
-import { plan as runPlan, apply as runApply, runTool, engineLabel, toolEnv, type ToolResolver, type ToolSet } from './runner.ts';
+import { avatarSource, roundAvatarPath } from './avatars.ts';
+import { plan as runPlan, apply as runApply, runTool, engineLabel, toolEnv, gitAuthEnv, type ToolResolver, type ToolSet } from './runner.ts';
 import { checkout as gitCheckout } from './git.ts';
 import { log } from './log.ts';
 import { evaluateRules, runCommands, stricter, type PolicyConfig, type PolicyResult } from './policies.ts';
@@ -175,6 +175,7 @@ interface PrContext {
   warnings: string[];
   lookup: Lookup;
   summaryUrl?: string | null;     // the summary comment, for links from replies
+  moduleAuth?: CloneAuth | null;  // read-only git credentials for module downloads
   // Per-request caches for the platform's compare view.
   fingerprints?: Map<string, Promise<string | null>>;
   baseChanges?: Promise<Comparison | null>;
@@ -363,6 +364,7 @@ export class App {
     const pr = await adapter.getPullRequest(repo, number);
     const root = this.workDir(repo, number);
     await this.checkout(root, await adapter.cloneAuth(repo), pr.headSha, `refs/pull/${number}/head`);
+    const moduleAuth = await this.moduleAuth(adapter, repo);
 
     const allowRepoConfig = policy.allow_repo_config !== false;
     const headConfig = allowRepoConfig ? loadRepoConfig(root) : emptyRepoConfig();
@@ -378,7 +380,7 @@ export class App {
     };
     return {
       adapter, repo, repoKey: this.repoKey(repo), policy, pr, root, projects, rulesConfig,
-      warnings: headConfig.warnings, lookup,
+      warnings: headConfig.warnings, lookup, moduleAuth,
     };
   }
 
@@ -727,8 +729,19 @@ export class App {
     return this.deps.resolver.resolve(ctx.root, project);
   }
 
+  // Read-only credentials for Terraform's git module downloads, unless TERIAC_MODULE_AUTH=false.
+  private async moduleAuth(adapter: VcsAdapter, repo: Repo): Promise<CloneAuth | null> {
+    if (this.deps.config.moduleAuth === false || !adapter.moduleAuth) return null;
+    return adapter.moduleAuth(repo).catch(err => {
+      log.warn('no git credentials for module downloads; private modules may fail', { repo: repo.fullName, err: (err as Error).message });
+      return null;
+    });
+  }
+
   private env(ctx: PrContext, project: Project, user: string) {
-    return toolEnv(this.deps.env ?? process.env, {
+    const base = this.deps.env ?? process.env;
+    return toolEnv(base, {
+      ...gitAuthEnv(base, ctx.moduleAuth),
       TF_PLUGIN_CACHE_DIR: join(this.deps.config.dataDir, 'plugin-cache'),
       TERIAC_PR_NUMBER: String(ctx.pr.number),
       TERIAC_HEAD_SHA: ctx.pr.headSha,
@@ -1277,7 +1290,10 @@ export class App {
       commit: sha => l.commit(sha),
       tree: (sha, dir) => l.tree(sha, dir),
       user: login => l.user(login),
-      avatar: login => (avatarSource(ctx.repo.platform, ctx.repo.host, login) ? `https://${ctx.repo.host}/${encodeURIComponent(login)}.png?size=36` : null),
+      // Round, from this server, when GitHub can reach it (a public https URL); else GitHub's square photo.
+      avatar: login => (!avatarSource(ctx.repo.platform, ctx.repo.host, login) ? null
+        : this.deps.config.spinnerUrl ? `${this.deps.config.publicUrl}${roundAvatarPath(ctx.repo.host, login)}`
+        : `https://${ctx.repo.host}/${encodeURIComponent(login)}.png?size=36`),
       run: id => `${this.deps.config.publicUrl}/#runs/${id}`,
     };
   }
